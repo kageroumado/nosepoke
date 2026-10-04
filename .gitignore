@@ -5,3 +5,4 @@ test-results/
 tests/screenshots/
 docs/
 *.md
+!/README.md
