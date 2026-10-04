@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — ratio schedules</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1 id="blockTitle">Block 1 — fixed ratio 1</h1>
+    <p>Three blocks, five minutes each. The lever pays after a set number of presses. The
+      number changes between blocks and is not disclosed to the subject.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Chamber 4 <small>Subject #23 · <span class="strainLab">Long-Evans</span></small><span class="live" id="phaseLab">FR 1</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>Lever on the right wall, hopper on the left. Nothing else in the box.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>press · delivery · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>cumulative record</span><span id="cumLab">0 responses · 0 pellets</span></div>
+        <canvas id="cumChart" height="132"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="v"><label>block <b id="blockNum">1</b> of 3</label><div class="meter"><i id="blockBar" style="width:0%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>lever</b> to press · <kbd>space</kbd></span>
+    <span class="chip">click the <b>hopper</b> to eat · <kbd>M</kbd></span>
+    <span class="chip" id="blockChip">block 1 of 3</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="gate">
+  <div class="sheet">
+    <div class="inner">
+      <h3 id="gateTitle">Block complete</h3>
+      <p class="lede" id="gateLede"></p>
+      <div class="explain" id="gateBody" style="border-top:0;padding-top:0"></div>
+      <div class="actions"><button class="btn primary" id="gateBtn">Begin the next block</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 4 — complete</h3>
+      <p class="lede">Three blocks, three records, one axis. Under them, every gap between
+        finishing a pellet and touching the lever again.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, disclose, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { ratioSubject } from '../shared/policies.js';
+import { BLOCKS, SATIETY_GAIN, blockPause, pauseRatio } from './04-ratio.ref.js';
+
+const LEVEL = 'd04';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+/** Five minutes a block by hand; the smoke run takes the same schedules over 100 s. */
+const DURATION = auto ? 100 : 300;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 4 — ratio schedules' });
+
+const STIMULI = { eat: { bins: 44, width: 0.5 }, click: { bins: 14, width: 0.25 } };
+
+const els = {
+  title: document.getElementById('blockTitle'),
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  cum: document.getElementById('cumLab'),
+  blockNum: document.getElementById('blockNum'),
+  blockBar: document.getElementById('blockBar'),
+  chip: document.getElementById('blockChip'),
+  note: document.getElementById('note'),
+};
+
+let index = 0;
+let sim = null;
+let rig = null;
+let closing = false;
+const finished = [];
+
+window.nosepoke = { sim: null, rig: null, shell, level: LEVEL, blocks: finished };
+
+/**
+ * Run one block. Each block is its own session on its own subject clock, so the
+ * cumulative record starts from zero and the schedules never contaminate each other.
+ */
+function start(i) {
+  index = i;
+  const block = BLOCKS[i];
+  closing = false;
+
+  sim = createSim({
+    seed: seed + i,
+    strain: playerStrain(),
+    stimuli: STIMULI,
+    satietyGain: SATIETY_GAIN,
+    schedule: { kind: block.kind, n: block.n, duration: DURATION },
+    // The synthetic subject waits out the responses it knows cannot pay, which is what
+    // makes the fixed and the variable record differ at all.
+    policy: auto ? ratioSubject({ n: block.n, variable: block.kind === 'VR' }) : null,
+  });
+
+  // A fresh canvas per block: the retired rig's pointer handler leaves with the node.
+  const old = document.getElementById('arena');
+  const arena = document.createElement('canvas');
+  arena.id = 'arena';
+  old.replaceWith(arena);
+
+  rig = mountRig({
+    sim,
+    arenaEl: arena,
+    charts: {
+      da: document.getElementById('daChart'),
+      ev: document.getElementById('evChart'),
+      cum: document.getElementById('cumChart'),
+    },
+    layout: 'chamber',
+    show: ['lever', 'tray'],
+    speed: auto ? 12 : 1,
+    onFrame: updateReadouts,
+  });
+  rig.on('press', () => sfx.press());
+  rig.on('eat', () => sfx.crunch());
+  shell.bindNotes(sim, els.note);
+
+  els.title.textContent = block.title;
+  els.phase.textContent = block.label;
+  els.chip.textContent = `block ${i + 1} of 3`;
+  els.blockNum.textContent = String(i + 1);
+  window.nosepoke.sim = sim;
+  window.nosepoke.rig = rig;
+  window.nosepoke.block = block.id;
+
+  heard = 0;
+  rig.start();
+}
+
+// The dispenser click sounds on delivery, not on the press that earned it.
+let heard = 0;
+function watchAudio() {
+  const events = sim.S.events;
+  for (; heard < events.length; heard++) if (events[heard].type === 'delivery') sfx.click();
+}
+
+function updateReadouts() {
+  const S = sim.S;
+  watchAudio();
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.cum.textContent = `${S.counts.pokes + S.counts.presses} responses · ${S.counts.eats} pellets`;
+  els.blockBar.style.width = Math.min(100, (S.t / DURATION) * 100).toFixed(0) + '%';
+  if (S.done && !closing) { closing = true; setTimeout(endBlock, auto ? 150 : 700); }
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || !sim || sim.S.done) return;
+  if (e.code === 'Space') { e.preventDefault(); rig.goTo('lever'); }
+  else if (e.key === 'm' || e.key === 'M') { rig.goTo('tray'); }
+});
+
+// --- between blocks ------------------------------------------------------
+const gate = document.getElementById('gate');
+const gateBtn = document.getElementById('gateBtn');
+
+function endBlock() {
+  rig.stop();
+  const block = BLOCKS[index];
+  finished.push({
+    id: block.id, label: block.label, kind: block.kind, n: block.n,
+    t: sim.S.t, events: sim.S.events, metrics: sim.metrics(), notes: sim.S.notes,
+  });
+  if (index + 1 >= BLOCKS.length) { debrief(); return; }
+  showGate(index + 1);
+}
+
+/**
+ * The interstitial. Before the variable-ratio block it carries the one thing the game
+ * says about itself in plain words, and writes it to the disclosure record.
+ */
+function showGate(next) {
+  const done = finished[finished.length - 1];
+  const body = document.getElementById('gateBody');
+  body.replaceChildren();
+  document.getElementById('gateTitle').textContent = `${done.label} complete`;
+  document.getElementById('gateLede').textContent =
+    `${done.metrics.responses} responses, ${done.metrics.reinforcers} pellets, `
+    + `${blockPause(done).toFixed(1)} s of waiting after each one.`;
+
+  const lines = [];
+  if (next === 1) {
+    lines.push('The next block pays after <b>five</b> presses instead of one. Same lever, same pellet, '
+      + 'same five minutes.');
+  }
+  if (next === 2) {
+    lines.push('The last block pays after an unpredictable number of presses, averaging five. '
+      + 'It is the same average price as the block you just finished.');
+    lines.push('<b>This is the schedule slot machines run on.</b> Variable ratio produces the highest '
+      + 'and steadiest response rates of any schedule, in every species it has been tried on, '
+      + 'including yours. You are being told before it starts rather than after, because the '
+      + 'interesting part is how little the telling changes your record. Watch your own line.');
+    disclose('vr-slot', { level: LEVEL, told: true, before: 'vr5', at: new Date().toISOString() });
+  }
+  for (const html of lines) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    body.append(p);
+  }
+  gateBtn.textContent = `Begin ${BLOCKS[next].label}`;
+  gate.classList.add('show');
+  if (auto) setTimeout(() => gateBtn.click(), 1000);
+}
+
+gateBtn.addEventListener('click', () => {
+  gate.classList.remove('show');
+  start(index + 1);
+});
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  const last = finished[finished.length - 1];
+  metrics = {
+    ...last.metrics,
+    blocks: finished,
+    pauseRatio: pauseRatio(finished),
+    duration: DURATION,
+  };
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  // What the epilogue reads back: one entry per block, no event logs, in the shape its
+  // evidence reader expects.
+  const saved = {
+    ...last.metrics,
+    pauseRatio: metrics.pauseRatio,
+    duration: DURATION,
+    blocks: finished.map((b) => ({
+      kind: b.kind, n: b.n, runRate: b.metrics.runRate, meanPause: b.metrics.meanPause,
+    })),
+  };
+  completeLevel(LEVEL, saved);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics: saved });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-ratio-schedules.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, duration: DURATION },
+    blocks: finished.map((b) => ({ id: b.id, label: b.label, t: b.t, metrics: b.metrics, notes: b.notes, events: b.events })),
+    pauseRatio: metrics.pauseRatio,
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d04-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+
+start(0);
+</script>
+</body>
+</html>

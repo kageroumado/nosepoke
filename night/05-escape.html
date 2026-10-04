@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — the escape</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  /* A canvas with only its width constrained keeps the intrinsic ratio of its width
+     and height attributes, and the rig then locks that inflated height in. Naming the
+     height here settles it on the first frame. */
+  #daChart { height: 118px; }
+  #evChart { height: 26px; }
+  #vChart { height: 44px; }
+
+  .beats { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--hair); }
+  .beats .b {
+    flex: 1; min-width: 0;
+    border: 1px solid var(--hair);
+    border-radius: 9px;
+    padding: 7px 9px;
+  }
+  .beats .b .n { font-family: var(--font-data); font-size: 10px; color: var(--ink-3); }
+  .beats .b .t { font-size: 12.5px; font-weight: 600; color: var(--ink-3); }
+  .beats .b[data-state="now"] { border-color: var(--accent); background: var(--accent-soft); }
+  .beats .b[data-state="now"] .t { color: var(--ink); }
+  .beats .b[data-state="clear"] { border-color: var(--pulse-up); }
+  .beats .b[data-state="clear"] .t { color: var(--pulse-up); }
+  .beats .b[data-state="missed"] .t { color: var(--pulse-down); }
+
+  .call { padding: 12px 14px; border-bottom: 1px solid var(--hair); }
+  .call h3 { margin: 0 0 3px; font-family: var(--font-round); font-size: 15px; }
+  .call p { margin: 0; font-size: 13px; color: var(--ink-2); }
+
+  .timing { padding: 10px 14px 14px; }
+  .timing .lab { font-size: 10.5px; font-family: var(--font-data); color: var(--ink-3); display: flex; justify-content: space-between; margin-bottom: 5px; }
+  .track { position: relative; height: 10px; border-radius: 5px; background: var(--panel-2); overflow: hidden; }
+  .track i { display: block; height: 100%; background: var(--cue); }
+  .track .win { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); }
+  .marks { position: relative; height: 15px; margin-top: 3px; }
+  .marks span {
+    position: absolute; transform: translateX(-50%);
+    font-family: var(--font-data); font-size: 9.5px; color: var(--ink-3); white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Night five — the escape</h1>
+    <p>Everything the colony knows, in one run, in order. The squeak buys the diversion, the count
+      buys the gap, the alarm has to be ignored, and the wall is the wall. Every number tonight
+      came out of a session somebody wrote down about you.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>The run <small id="whoLab">Subject #23 · <span class="strainLab">Wistar</span></small><span class="live" id="phaseLab">in the nest</span></h2>
+      <div class="beats" id="beatRail"></div>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">the colony</span>
+        <p id="note"><em>Everyone is awake. Nobody is talking. The door has been unlocked since four.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <div class="call">
+        <h3 id="callTitle">Wait for the squeak</h3>
+        <p id="callBody">The cart is two rooms out. When it squeaks, be at the bin.</p>
+      </div>
+      <div class="timing">
+        <div class="lab"><span id="trackLab">the cart</span><span id="trackNum">—</span></div>
+        <div class="track" id="track"><i id="trackFill" style="width:0%"></i></div>
+        <div class="marks" id="marks"></div>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>squeak · alarm · take</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>prediction V̂</span><span>TD(λ)</span></div>
+        <canvas id="vChart" height="44"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>tonic</label><div class="meter"><i id="tonicBar" style="width:20%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints" id="hints"></div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Out</h3>
+      <p class="lede">The last thing anybody took out of that building was the record of what it had
+        taught them.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import './05-escape.ref.js';
+import { speak } from './colony.js';
+import { createSim, effortPresses } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, levelMetrics } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+
+const LEVEL = 'n05';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 41;
+const SPEED = auto ? 3 : 1;
+
+/* ---- what the player's own record sets ---------------------------------- */
+
+const n01 = levelMetrics('n01');
+const n02 = levelMetrics('n02');
+const n03 = levelMetrics('n03');
+const n04 = levelMetrics('n04');
+const d05 = levelMetrics('d05');
+
+/** The colony moves on one squeak if you answered the cart reliably, otherwise two. */
+const SQUEAKS_NEEDED = n01 && n01.lateAnticipationRate >= 0.5 ? 1 : 2;
+/** The guard's round is the interval you learned to time. */
+const INTERVAL = (n02 && n02.interval) || (d05 && d05.interval) || 12;
+/** Where in that interval you usually go, as a fraction. */
+const QUARTER_LIFE = clamp((n02 && n02.quarterLife) || (d05 && d05.quarterLife) || 0.5, 0.15, 0.95);
+/** A colony that ignores the alarm holds still for less time than one that jumps at it. */
+const BLOCKED = n03 && n03.naiveLight > 0.001 ? Math.max(0, n03.vLight / n03.naiveLight) : null;
+const HOLD = BLOCKED == null ? 4 : 3 + Math.min(1, BLOCKED) * 2.5;
+/** Rounds to count before the gap is trusted. */
+const ROUNDS_NEEDED = 3;
+/** Rats who went up the wall on night four and left the rope hanging. */
+const CARRIERS = n04 && n04.barrierCount ? n04.barrierCount : 0;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'night 5 — the escape' });
+
+const sim = createSim({
+  seed,
+  strain: 'wistar',
+  gamma: 0.97, alpha: 0.1, lambda: 0.9,
+  stimuli: {
+    eat: { bins: 44, width: 0.5 },
+    tone: { bins: 20, width: 0.25 },
+    light: { bins: 20, width: 0.25 },
+  },
+  // The page drives this one: four beats it plays itself, through the same verbs any
+  // schedule machine uses.
+  schedule: { kind: 'FREE', phase: 'nest', rateCeiling: 1 / 10 },
+  autoEat: 0.5,
+});
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    v: document.getElementById('vChart'),
+  },
+  layout: 'colony',
+  show: ['bin', 'crumbs', 'door'],
+  speed: SPEED,
+  onFrame: tick,
+  onTap: onTap,
+});
+
+rig.props.crumbs.x = 172;
+rig.props.crumbs.y = 132;
+rig.addProp('cart', { x: rig.arena.w - 118, y: 74, r: 24, kind: 'speaker', action: 'approach', stand: [-6, 44] });
+rig.addProp('nest', { x: 110, y: rig.arena.h - 100, r: 42, kind: 'nest', action: 'approach', stand: [46, 0] });
+rig.addProp('crack', { x: rig.arena.w - 96, y: rig.arena.h / 2, r: 26, kind: 'port', action: 'poke', stand: [-44, 0] });
+rig.addProp('alarm', { x: rig.arena.w - 40, y: rig.arena.h / 2 - 74, r: 18, kind: 'light' });
+for (const [name, x] of [['wallLeft', 300], ['wall', 372], ['wallRight', 444]]) {
+  rig.addProp(name, { x, y: rig.arena.h - 74, r: 34, kind: 'barrier', action: 'press', stand: [0, -46] });
+}
+rig.rat.x = 150;
+rig.rat.y = rig.arena.h - 100;
+
+rig.on('eat', () => sfx.crunch());
+rig.on('press', () => sfx.press());
+shell.bindNotes(sim, document.getElementById('note'));
+
+/* ---- the four beats ------------------------------------------------------ */
+
+const BEATS = [
+  {
+    id: 'squeak', label: 'the squeak', short: 'squeak',
+    title: 'Wait for the squeak',
+    body: `The cart is two rooms out. When the wheel squeaks, be at the bin: the crumbs go down and
+           the janitor turns to look at them. ${SQUEAKS_NEEDED === 1 ? 'One squeak is enough.' : 'Twice, to be sure.'}`,
+    hints: ['click the <b>bin</b> during the squeak', 'the squeak comes first, always'],
+    props: ['bin', 'crumbs', 'cart', 'nest'],
+  },
+  {
+    id: 'count', label: 'the count', short: 'count',
+    title: "Count the guard's rounds",
+    body: `He comes past on the same interval he always has. Peek through the crack when the round is
+           due, not before. ${ROUNDS_NEEDED} clean counts and the gap is yours.`,
+    hints: ['click the <b>crack</b> to peek · <kbd>space</kbd>', 'early is seen, late is missed'],
+    props: ['crack', 'door', 'nest'],
+  },
+  {
+    id: 'hold', label: 'the alarm', short: 'hold',
+    title: 'Do not look up',
+    body: 'The red light over the door will come on. It has never predicted anything the squeak did '
+      + 'not already predict. Hold still until it goes off.',
+    hints: ['do nothing at all', 'moving now is a flinch, and it is logged'],
+    props: ['alarm', 'door', 'crack'],
+  },
+  {
+    id: 'wall', label: 'the wall', short: 'wall',
+    title: 'Over the wall',
+    body: 'Last thing. Everyone else is over. Climb.',
+    hints: ['click the <b>wall</b>, once per effort · <kbd>W</kbd>', 'then the <b>door</b>'],
+    props: ['wallLeft', 'wall', 'wallRight', 'door'],
+  },
+];
+
+const results = [];
+let beat = -1;
+let beatFrom = 0;
+let state = {};
+let finished = false;
+let seen = 0;
+let flinches = 0;
+let wallNeed = 0;
+let wallPresses = 0;
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  clock: document.getElementById('clock'),
+  tonic: document.getElementById('tonicBar'),
+  rail: document.getElementById('beatRail'),
+  title: document.getElementById('callTitle'),
+  body: document.getElementById('callBody'),
+  hints: document.getElementById('hints'),
+  trackLab: document.getElementById('trackLab'),
+  trackNum: document.getElementById('trackNum'),
+  fill: document.getElementById('trackFill'),
+  marks: document.getElementById('marks'),
+  track: document.getElementById('track'),
+};
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+function showProps(names) {
+  for (const p of Object.values(rig.props)) p.hidden = !names.includes(p.name);
+}
+
+function paintRail() {
+  els.rail.replaceChildren();
+  BEATS.forEach((b, i) => {
+    const done = results[i];
+    const el = document.createElement('div');
+    el.className = 'b';
+    el.dataset.state = done ? (done.cleared ? 'clear' : 'missed') : i === beat ? 'now' : 'wait';
+    const n = document.createElement('div');
+    n.className = 'n';
+    n.textContent = String(i + 1);
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = b.short;
+    el.append(n, t);
+    els.rail.append(el);
+  });
+}
+
+function paintCall() {
+  const b = BEATS[beat];
+  els.title.textContent = b.title;
+  els.body.textContent = b.body.replace(/\s+/g, ' ').trim();
+  els.hints.replaceChildren();
+  for (const h of b.hints) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = h;
+    els.hints.append(chip);
+  }
+}
+
+function startBeat(i) {
+  beat = i;
+  beatFrom = sim.S.t;
+  state = { t0: sim.S.t };
+  const b = BEATS[i];
+  sim.setPhase(b.id);
+  showProps(b.props);
+  paintRail();
+  paintCall();
+  els.marks.replaceChildren();
+  document.querySelectorAll('.track .win').forEach((n) => n.remove());
+  if (i === 0) { state.squeaks = 0; state.hits = 0; state.nextCue = sim.S.t + 3; }
+  if (i === 1) { state.rounds = 0; state.counted = 0; state.passAt = sim.S.t + INTERVAL; markCount(); }
+  if (i === 2) { state.lit = false; state.flinched = false; state.cueAt = sim.S.t + 1.6; }
+  if (i === 3) {
+    // The effort rule at the subject's current tonic estimate, plus the height of this
+    // particular wall, less one effort for every rat who went up on night four and
+    // left the rope behind.
+    wallNeed = Math.max(6, effortPresses(sim.S.tonicNorm) + 6 - CARRIERS);
+    state.need = wallNeed;
+  }
+}
+
+function endBeat(cleared, detail) {
+  results[beat] = { id: BEATS[beat].id, label: BEATS[beat].label, from: beatFrom, to: sim.S.t, cleared, detail };
+  paintRail();
+  if (beat + 1 < BEATS.length) startBeat(beat + 1);
+  else finish();
+}
+
+/** The window in which a peek counts, drawn onto the timing track. */
+function markCount() {
+  const win = document.createElement('div');
+  win.className = 'win';
+  win.style.left = '75%';
+  win.style.width = '25%';
+  els.track.append(win);
+  const mark = document.createElement('span');
+  mark.style.left = (QUARTER_LIFE * 100).toFixed(1) + '%';
+  mark.textContent = 'where you usually go';
+  els.marks.append(mark);
+  const due = document.createElement('span');
+  due.style.left = '88%';
+  due.textContent = 'the gap';
+  els.marks.append(due);
+}
+
+/* ---- input --------------------------------------------------------------- */
+
+function onTap() {
+  // Holding still is the whole of beat three, so a tap during the alarm is a flinch
+  // whatever it lands on. The move still happens; the record simply says it did.
+  if (beat === 2 && state.lit) {
+    state.flinched = true;
+    flinches++;
+  }
+  return undefined;
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || finished) return;
+  if (e.code === 'Space') { e.preventDefault(); if (beat === 1) rig.goTo('crack'); }
+  else if (e.key === 'w' || e.key === 'W') { if (beat === 3) rig.goTo('wall'); }
+  else if (e.key === 'b' || e.key === 'B') { if (beat === 0) rig.goTo('bin'); }
+  if (beat === 2 && state.lit) { state.flinched = true; flinches++; }
+});
+
+rig.on('arrive', ({ prop }) => {
+  if (beat === 0 && (prop === 'bin' || prop === 'crumbs')) {
+    const age = sim.S.t - (state.cueT || -99);
+    // One squeak, one answer: standing at the bin twice on the same cue is one arrival.
+    if (age >= 0 && age <= 2.2 && state.answered !== state.cueT) {
+      state.answered = state.cueT;
+      state.hits++;
+      sim.deliver(1, { kind: 'crumbs' });
+      sim.note(state.hits >= SQUEAKS_NEEDED
+        ? 'The cart stops. He is looking at the floor by the bin. Go.'
+        : 'Crumbs down, and he did not look up. Again.');
+      if (state.hits >= SQUEAKS_NEEDED) endBeat(true, `${state.hits} of ${state.squeaks} squeaks answered`);
+    }
+  }
+});
+
+rig.on('poke', () => {
+  if (beat !== 1) return;
+  const since = sim.S.t - (state.passAt - INTERVAL);
+  if (since >= INTERVAL * 0.75) {
+    state.counted++;
+    sim.deliver(1, { kind: 'seed' });
+    state.passAt = sim.S.t + INTERVAL;
+    sim.note('Counted. ' + state.counted + ' of ' + ROUNDS_NEEDED + '.');
+    if (state.counted >= ROUNDS_NEEDED) endBeat(true, `${state.counted} rounds, ${seen} seen`);
+  } else {
+    seen++;
+    sfx.poke();
+    document.getElementById('arena').animate(
+      [{ opacity: 1 }, { opacity: 0.55 }, { opacity: 1 }], { duration: 240, easing: 'ease-out' },
+    );
+    sim.note('Boots stop. Boots start again. He did not turn round.');
+  }
+});
+
+rig.on('press', () => {
+  if (beat !== 3) return;
+  wallPresses++;
+  if (wallPresses >= state.need) {
+    sim.deliver(3, { kind: 'sacks' });
+    sim.setPhase('out');
+    sim.note('Over. The door is open and the corridor is empty and nobody is behind you.');
+    endBeat(true, `${wallPresses} efforts`);
+  }
+});
+
+/* ---- the loop ------------------------------------------------------------ */
+
+let spoken = 0;
+function tick() {
+  const S = sim.S;
+  els.tonic.style.width = (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+
+  if (beat < 0) { startBeat(0); speak(sim, LEVEL, 0); spoken = 1; return; }
+  if (finished) return;
+
+  if (beat === 0) tickSqueak();
+  else if (beat === 1) tickCount();
+  else if (beat === 2) tickHold();
+  else if (beat === 3) tickWall();
+
+  if (spoken === 1 && beat >= 1) { speak(sim, LEVEL, 1); spoken = 2; }
+  else if (spoken === 2 && beat >= 3) { speak(sim, LEVEL, 2); spoken = 3; }
+
+  if (auto) autoPlay();
+}
+
+function tickSqueak() {
+  const S = sim.S;
+  els.phase.textContent = 'listening';
+  if (state.nextCue != null && S.t >= state.nextCue) {
+    state.squeaks++;
+    state.cueT = S.t;
+    state.nextCue = S.t + 7 + (state.squeaks % 3);
+    sim.cue('tone');
+    sfx.tone(true, 2);
+  }
+  const age = state.cueT != null ? S.t - state.cueT : 99;
+  els.trackLab.textContent = age <= 2.2 ? 'the squeak, go now' : 'the cart';
+  els.trackNum.textContent = state.hits + ' / ' + SQUEAKS_NEEDED;
+  els.fill.style.width = age <= 2.2 ? (100 - (age / 2.2) * 100).toFixed(0) + '%'
+    : Math.min(100, ((S.t - (state.cueT || state.t0)) / 8) * 100).toFixed(0) + '%';
+  if (state.squeaks >= SQUEAKS_NEEDED + 2 && age > 2.2) {
+    endBeat(state.hits > 0, `${state.hits} of ${state.squeaks} squeaks answered`);
+  }
+}
+
+function tickCount() {
+  const S = sim.S;
+  els.phase.textContent = 'at the crack';
+  const since = S.t - (state.passAt - INTERVAL);
+  const frac = clamp(since / INTERVAL, 0, 1.2);
+  els.trackLab.textContent = 'the round';
+  els.trackNum.textContent = state.counted + ' / ' + ROUNDS_NEEDED + ' · seen ' + seen;
+  els.fill.style.width = (Math.min(1, frac) * 100).toFixed(0) + '%';
+  if (since > INTERVAL * 1.6) {
+    state.passAt = S.t + INTERVAL;
+    state.rounds++;
+    sim.note('That one went past uncounted.');
+  }
+  if (S.t - state.t0 > INTERVAL * 6) endBeat(state.counted > 0, `${state.counted} rounds, ${seen} seen`);
+}
+
+function tickHold() {
+  const S = sim.S;
+  els.phase.textContent = state.lit ? 'holding' : 'waiting';
+  if (!state.lit && S.t >= state.cueAt) {
+    state.lit = true;
+    state.litAt = S.t;
+    sim.cue('light');
+    sim.note('Red, over the door. Nobody in this colony has looked up in a week.');
+  }
+  const held = state.lit ? S.t - state.litAt : 0;
+  els.trackLab.textContent = state.lit ? 'hold' : 'the alarm';
+  els.trackNum.textContent = state.lit ? held.toFixed(1) + ' / ' + HOLD.toFixed(1) + ' s' : '—';
+  els.fill.style.width = state.lit ? Math.min(100, (held / HOLD) * 100).toFixed(0) + '%' : '0%';
+  if (state.lit && held >= HOLD) {
+    sim.cue('light', false);
+    endBeat(!state.flinched, state.flinched ? `${flinches} flinches` : 'held, no flinch');
+  }
+}
+
+function tickWall() {
+  els.phase.textContent = 'climbing';
+  els.trackLab.textContent = 'the wall';
+  els.trackNum.textContent = wallPresses + ' / ' + state.need + ' efforts';
+  els.fill.style.width = Math.min(100, (wallPresses / state.need) * 100).toFixed(0) + '%';
+}
+
+/** Under `?auto=1` the run plays itself, on the sim's own clock rather than the wall clock. */
+let autoAt = 0;
+function autoPlay() {
+  const S = sim.S;
+  if (S.t < autoAt) return;
+  if (beat === 0) {
+    const age = state.cueT != null ? S.t - state.cueT : 99;
+    if (age > 0.2 && age < 1.4) { rig.goTo('bin'); autoAt = S.t + 2.5; }
+  } else if (beat === 1) {
+    const since = S.t - (state.passAt - INTERVAL);
+    if (since >= INTERVAL * 0.85) { rig.goTo('crack'); autoAt = S.t + 2; }
+    else if (since > INTERVAL * 0.3 && since < INTERVAL * 0.4) { rig.goTo('crack'); autoAt = S.t + 1.5; }
+  } else if (beat === 3) {
+    rig.goTo('wall');
+    autoAt = S.t + 0.35;
+  }
+}
+
+rig.start();
+paintRail();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+/* ---- the debrief --------------------------------------------------------- */
+
+let metrics = null;
+function finish() {
+  if (finished) return;
+  finished = true;
+  showProps(['door', 'nest']);
+  els.phase.textContent = 'out';
+  els.title.textContent = 'Out';
+  els.body.textContent = 'The corridor, the loading bay, and then whatever is past the loading bay.';
+  els.hints.replaceChildren();
+  setTimeout(() => { rig.stop(); debrief(); }, auto ? 250 : 1200);
+}
+
+function debrief() {
+  const base = sim.metrics();
+  metrics = {
+    ...base,
+    beats: results,
+    seconds: sim.S.t,
+    timesSeen: seen,
+    flinches,
+    wallPresses,
+    sources: {
+      squeaksNeeded: SQUEAKS_NEEDED,
+      interval: INTERVAL,
+      quarterLife: QUARTER_LIFE,
+      hold: HOLD,
+      blocked: BLOCKED,
+      wallPresses: wallNeed,
+      carriers: CARRIERS,
+      fromRecord: { n01: !!n01, n02: !!n02, n03: !!n03, n04: !!n04, d05: !!d05 },
+    },
+  };
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-the-escape.png');
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

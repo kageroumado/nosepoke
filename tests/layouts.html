@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — layout gallery</title>
+<link rel="stylesheet" href="../shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+  <section class="procedure">
+    <h1>Layout gallery</h1>
+    <p>Every arena layout with its named props, drawn procedurally. Click a prop to send
+      the rat there. This is what a page gets before any art exists.</p>
+  </section>
+  <div class="grid2" id="gallery"></div>
+</div>
+
+<script type="module">
+import { createSim } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+
+mountShell({ subtitle: 'layout gallery', phase: 'day' });
+
+const LAYOUTS = ['chamber', 'tmaze', 'colony', 'park', 'raturn'];
+const gallery = document.getElementById('gallery');
+
+for (const layout of LAYOUTS) {
+  const card = document.createElement('section');
+  card.className = 'card';
+  const h = document.createElement('h2');
+  h.textContent = layout;
+  const live = document.createElement('span');
+  live.className = 'live';
+  h.append(live);
+  const canvas = document.createElement('canvas');
+  canvas.className = 'arena';
+  card.append(h, canvas);
+  gallery.append(card);
+
+  const sim = createSim({
+    seed: 7,
+    schedule: { kind: 'FREE', duration: 0 },
+  });
+  sim.deliver(3);
+  const rig = mountRig({ sim, arenaEl: canvas, layout, onFrame() {
+    live.textContent = Object.keys(rig.props).filter((n) => !rig.props[n].hidden).join(' · ');
+  } });
+  rig.start();
+}
+</script>
+</body>
+</html>

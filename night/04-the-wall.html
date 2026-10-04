@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — the wall</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  /* A canvas with only its width constrained keeps the intrinsic ratio of its width
+     and height attributes, and the rig then locks that inflated height in. Naming the
+     height here settles it on the first frame. */
+  #daChart { height: 100px; }
+  #evChart { height: 26px; }
+
+  .rig.wide { margin-top: 14px; }
+  .roster { display: flex; flex-direction: column; }
+  .roster .r {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 58px 62px;
+    gap: 8px; align-items: center;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .roster .r:last-child { border-bottom: 0; }
+  .roster .r[data-state="up"] { background: var(--accent-soft); }
+  .roster .r[data-state="done"] .name, .roster .r[data-state="done"] .who { color: var(--ink-3); }
+  .roster .name { font-family: var(--font-round); font-weight: 700; font-size: 13.5px; }
+  .roster .who { font-size: 11.5px; color: var(--ink-2); }
+  .roster .num { font-family: var(--font-data); font-size: 12px; color: var(--ink-2); text-align: right; }
+  .roster .out { font-family: var(--font-data); font-size: 11px; color: var(--ink-3); text-align: right; }
+  .roster .out.barrier { color: var(--accent); }
+  .roster .out.flat { color: var(--predict); }
+  .rhead {
+    display: grid; grid-template-columns: minmax(0, 1fr) 58px 62px; gap: 8px;
+    padding: 7px 14px; border-bottom: 1px solid var(--hair);
+    font-family: var(--font-data); font-size: 10.5px; color: var(--ink-3);
+  }
+  .rhead span:not(:first-child) { text-align: right; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Night four — the wall</h1>
+    <p>Everything the colony is taking has to go over the wall by the door or the long way round
+      through the drain. The wall carries twice as much and costs a climb. Every rat charges a
+      different price for a climb, and the guard comes back when he comes back.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>The loading floor <small id="whoLab">Whisk · Lister Hooded</small><span class="live" id="phaseLab">at the bottom</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">the colony</span>
+        <p id="note"><em>Six of you, one wall, one drain, and a corridor that will not stay empty.</em></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Roster <small>resting vigor sets the price</small><span class="live" id="totalLab">0 sacks</span></h2>
+      <div class="rhead"><span>rat</span><span>climb</span><span>carried</span></div>
+      <div class="roster" id="roster"></div>
+    </section>
+  </div>
+
+  <section class="card rig wide">
+    <h2>Current subject <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+    <div class="strip">
+      <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+      <canvas id="daChart" height="100"></canvas>
+    </div>
+    <div class="strip">
+      <div class="lab"><span>events</span><span>press · load · carry</span></div>
+      <canvas id="evChart" height="26"></canvas>
+    </div>
+    <div class="vitals">
+      <div class="v"><label>time before the guard is back</label><div class="meter"><i id="budgetBar" style="width:100%"></i></div></div>
+      <div class="clock" id="clock">00:00</div>
+    </div>
+  </section>
+
+  <div class="hints">
+    <span class="chip">click the <b>wall</b> to send this one up · <kbd>W</kbd></span>
+    <span class="chip">click the <b>drain</b> to send it round · <kbd>D</kbd></span>
+    <span class="chip">deciding slowly spends the same clock as climbing</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Night four — the roster</h3>
+      <p class="lede">Ash counted the pile by the door twice and wrote the total on the wall in
+        something nobody asked about.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import './04-the-wall.ref.js';
+import { bestAllocation } from './04-the-wall.ref.js';
+import { COLONY, barrierCost, restingVigor, BASELINE_GAIN, FIELD_NOTES, colonyRat } from './colony.js';
+import { createSim, STRAINS } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, levelMetrics } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+
+const LEVEL = 'n04';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 41;
+
+const BARRIER_SACKS = 4;
+const FLAT_SACKS = 2;
+const SPEED = auto ? 5 : 1;
+
+/**
+ * The gap between rounds, taken from the interval the player actually learned to time.
+ * Falling back to twelve seconds only matters for someone who came here first.
+ */
+function guardInterval() {
+  const n02 = levelMetrics('n02');
+  const d05 = levelMetrics('d05');
+  return (n02 && n02.interval) || (d05 && d05.interval) || 12;
+}
+const INTERVAL = guardInterval();
+const BUDGET = INTERVAL * 5;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'night 4 — the wall' });
+
+/** One roster row per colony rat, each with its own session and its own strain. */
+const roster = COLONY.map((rat, i) => ({
+  id: rat.id,
+  name: rat.name,
+  strain: rat.strain,
+  label: STRAINS[rat.strain].label,
+  vigor: restingVigor(rat.strain),
+  cost: barrierCost(rat.strain),
+  route: null,
+  presses: 0,
+  pellets: 0,
+  seconds: 0,
+  sim: makeSim(rat, i),
+}));
+
+/**
+ * A colony rat on the loading floor: one choice trial, the wall worth four sacks and
+ * the drain worth two, with the tonic estimate lifted so the rat sits at its own
+ * strain's baseline vigor when it makes the choice. That baseline is what sets the
+ * price of the climb, through `effortPresses`.
+ */
+function makeSim(rat, i) {
+  const sim = createSim({
+    seed: seed + i * 7,
+    strain: rat.strain,
+    schedule: {
+      kind: 'CHOICE', trials: 1, blockSize: 1,
+      barrierPellets: BARRIER_SACKS, flatPellets: FLAT_SACKS,
+    },
+    policy: climber(),
+  });
+  sim.setTonicGain(BASELINE_GAIN);
+  return sim;
+}
+
+/**
+ * The rat does its own climbing once the route is assigned, and eats what it earns.
+ * It reads the schedule's own `barrier` event rather than the last choice made, because
+ * a second click after the route is set is a rat changing its mind about a wall it is
+ * already halfway up, and the schedule ignores it.
+ */
+function climber() {
+  return (S, api) => {
+    if (S.pellets > 0) return 'eat';
+    for (let i = S.events.length - 1; i >= 0; i--) {
+      const e = S.events[i];
+      if (e.type === 'trial') return null;
+      if (e.type === 'barrier') return api.rand() < 0.6 ? 'press' : null;
+    }
+    return null;
+  };
+}
+
+let index = 0;
+let spentBefore = 0;
+let rig = null;
+let shown = false;
+let spoken = 0;
+
+const els = {
+  who: document.getElementById('whoLab'),
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  budget: document.getElementById('budgetBar'),
+  total: document.getElementById('totalLab'),
+  note: document.getElementById('note'),
+  roster: document.getElementById('roster'),
+};
+
+/**
+ * The colony speaks for itself on this page instead of through the shell's ticker,
+ * because six sessions run one after another and the schedule's own notes belong to
+ * whichever one happens to be mounted. The lines still go into that rat's record.
+ */
+function say(sim, i) {
+  const line = (FIELD_NOTES[LEVEL] || [])[i];
+  if (!line) return;
+  const who = colonyRat(line.who);
+  const text = (who ? who.name + ': ' : '') + line.text;
+  els.note.textContent = text;
+  if (sim) sim.note(text);
+}
+
+/** Seconds the colony has spent on the floor. A finished turn is already banked. */
+function spentSeconds() {
+  return spentBefore + (rig && rig.running ? rig.sim.S.t : 0);
+}
+
+/** Replace the arena element so the previous rig's pointer handler goes with it. */
+function freshArena() {
+  const old = document.getElementById('arena');
+  const el = old.cloneNode(false);
+  old.replaceWith(el);
+  return el;
+}
+
+function mountCurrent() {
+  const row = roster[index];
+  rig = mountRig({
+    sim: row.sim,
+    arenaEl: freshArena(),
+    charts: { da: document.getElementById('daChart'), ev: document.getElementById('evChart') },
+    layout: 'colony',
+    show: ['door'],
+    speed: SPEED,
+    onFrame: updateReadouts,
+    // One route each. Once this rat is committed the wall and the drain stop taking
+    // clicks, so the roster and the schedule can never disagree about where it went.
+    onTap: (prop) => !(row.route && prop && String(rig.props[prop].action || '').startsWith('choose:')),
+  });
+  // The wall is three barrier segments so it reads as a wall and can be clicked
+  // anywhere along it; the drain is a pipe you go through rather than over.
+  for (const [name, x] of [['wallLeft', 300], ['wall', 372], ['wallRight', 444]]) {
+    rig.addProp(name, { x, y: 112, r: 34, kind: 'barrier', action: 'choose:barrier', stand: [0, 48] });
+  }
+  rig.addProp('drain', { x: 372, y: 340, r: 44, kind: 'tunnel', action: 'choose:flat', stand: [0, -50] });
+  rig.addProp('sacks', { x: rig.arena.w - 132, y: rig.arena.h / 2 + 74, r: 30, kind: 'tray', action: 'eat', stand: [30, -18] });
+  rig.addProp('nest', { x: 118, y: rig.arena.h / 2, r: 44, kind: 'nest', action: 'approach', stand: [50, 0] });
+  rig.rat.x = 170;
+  rig.rat.y = rig.arena.h / 2;
+  rig.on('press', () => sfx.press());
+  rig.on('eat', () => sfx.crunch());
+  rig.on('choose', ({ arm }) => {
+    if (row.route) return;
+    row.route = arm === 'barrier' ? 'barrier' : 'flat';
+    paintRoster();
+  });
+  rig.start();
+  els.who.textContent = row.name + ' · ' + row.label;
+  window.nosepoke.sim = row.sim;
+  window.nosepoke.rig = rig;
+  if (auto) queueAutoChoice(row);
+}
+
+/**
+ * Under `?auto=1` the quartermaster is a rule rather than a player: the wall goes to
+ * whoever charges less than the roster's median for it, and the debrief scores that
+ * allocation like any other.
+ */
+const AUTO_THRESHOLD = median(roster.map((r) => r.cost));
+function queueAutoChoice(row) {
+  setTimeout(() => {
+    if (row.sim.S.done || row.route) return;
+    rig.goTo(row.cost < AUTO_THRESHOLD ? 'wall' : 'drain');
+  }, 150);
+}
+function median(a) {
+  const s = a.slice().sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || !rig || rig.sim.S.done) return;
+  if (e.key === 'w' || e.key === 'W') rig.goTo('wall');
+  else if (e.key === 'd' || e.key === 'D') rig.goTo('drain');
+});
+
+let advancing = false;
+function updateReadouts() {
+  const row = roster[index];
+  const S = row.sim.S;
+  const spent = spentSeconds();
+
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(spent / 60)).padStart(2, '0');
+  const ss = String(Math.floor(spent % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.budget.style.width = Math.max(0, 100 - (spent / BUDGET) * 100).toFixed(1) + '%';
+  els.phase.textContent = S.done ? 'over the top' : row.route === 'barrier' ? 'climbing' : row.route === 'flat' ? 'round the drain' : 'at the bottom';
+
+  row.presses = S.counts.presses;
+  row.pellets = S.counts.deliveries ? (row.route === 'barrier' ? BARRIER_SACKS : FLAT_SACKS) : 0;
+  row.seconds = S.t;
+  els.total.textContent = carried() + ' sacks';
+
+  if (spoken === 0) { say(row.sim, 0); spoken = 1; }
+  else if (spoken === 1 && index >= 1) { say(row.sim, 1); spoken = 2; }
+  else if (spoken === 2 && index >= 3) { say(row.sim, 2); spoken = 3; }
+
+  if (!advancing && (S.done || spent >= BUDGET)) {
+    advancing = true;
+    setTimeout(advance, auto ? 150 : 700);
+  }
+}
+
+function carried() {
+  return roster.reduce((a, r) => a + r.pellets, 0);
+}
+
+function advance() {
+  const row = roster[index];
+  rig.stop();
+  spentBefore += row.sim.S.t;
+  if (!row.route) row.route = 'missed';
+  paintRoster();
+
+  if (spentBefore >= BUDGET) {
+    for (let i = index + 1; i < roster.length; i++) roster[i].route = 'missed';
+    paintRoster();
+    finish();
+    return;
+  }
+  index++;
+  if (index >= roster.length) { finish(); return; }
+  advancing = false;
+  mountCurrent();
+  paintRoster();
+}
+
+function paintRoster() {
+  els.roster.replaceChildren();
+  roster.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'r';
+    row.dataset.state = i === index && !shown ? 'up' : r.route ? 'done' : 'waiting';
+
+    const who = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = r.name;
+    const sub = document.createElement('div');
+    sub.className = 'who';
+    sub.textContent = r.label;
+    who.append(name, sub);
+
+    const cost = document.createElement('div');
+    cost.className = 'num';
+    cost.textContent = r.cost + 'p';
+
+    const out = document.createElement('div');
+    out.className = 'out' + (r.route === 'barrier' ? ' barrier' : r.route === 'flat' ? ' flat' : '');
+    out.textContent = r.route === 'missed' ? '—' : r.route ? r.pellets + ' sacks' : '';
+
+    row.append(who, cost, out);
+    els.roster.append(row);
+  });
+}
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim: null, rig: null, shell, level: LEVEL, roster };
+paintRoster();
+mountCurrent();
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function finish() {
+  if (shown) return;
+  shown = true;
+  paintRoster();
+  setTimeout(debrief, auto ? 200 : 700);
+}
+
+function debrief() {
+  const best = bestAllocation(roster, BUDGET, BARRIER_SACKS, FLAT_SACKS);
+  metrics = {
+    kind: 'CHOICE',
+    level: LEVEL,
+    interval: INTERVAL,
+    budget: BUDGET,
+    seconds: spentSeconds(),
+    barrierPellets: BARRIER_SACKS,
+    flatPellets: FLAT_SACKS,
+    pellets: carried(),
+    barrierCount: roster.filter((r) => r.route === 'barrier').length,
+    flatCount: roster.filter((r) => r.route === 'flat').length,
+    pressesPaid: roster.reduce((a, r) => a + r.presses, 0),
+    bestPellets: best.pellets,
+    bestPlan: best.plan,
+    roster: roster.map(({ sim, ...r }) => ({ ...r, tonic: sim.S.tonicNorm })),
+  };
+
+  document.getElementById('veil').classList.add('show');
+  const figSim = roster[Math.min(index, roster.length - 1)].sim;
+  renderFigure(document.getElementById('fig'), { sim: figSim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, figSim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, figSim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  window.nosepoke.figureSim = figSim;
+  completeLevel(LEVEL, metrics);
+  addRecord({
+    level: LEVEL, seed, share: shareText(LEVEL, metrics), metrics,
+    events: roster.flatMap((r) => r.sim.S.events.map((e) => ({ ...e, rat: r.id }))),
+  });
+  for (const r of roster) {
+    if (r.route && r.route !== 'missed') {
+      addRat({ name: r.name, level: LEVEL, strain: r.strain, code: r.sim.serialize() });
+    }
+  }
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim: window.nosepoke.figureSim, level: LEVEL, metrics }, 'nosepoke-the-wall.png');
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

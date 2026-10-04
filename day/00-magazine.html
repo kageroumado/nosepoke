@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — magazine training</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Session 0 — magazine training</h1>
+    <p>Subject 23 assigned to chamber 4. Pellets are delivered on a variable-time schedule; no
+      response is required and none is recorded. The dispenser makes a click a moment before each
+      pellet lands. <b>Click anywhere in the chamber</b> to move the subject, and <b>click the
+      hopper</b> to collect. The only measure taken today is how long collection takes.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Chamber 4 <small>Subject #23 · <span id="strainLab">—</span></small><span class="live" id="phaseLab">magazine training</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>New subject. Ear-punched, weighed, and put in the box.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>click · delivery · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>prediction V̂</span><span>TD(λ)</span></div>
+        <canvas id="vChart" height="44"></canvas>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>latency to the hopper</span><span id="latLab">0 of 12 collected</span></div>
+        <canvas id="latChart" height="132" style="display:block;width:100%"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">listen for the <b>click</b>, then collect</span>
+    <span class="chip">click the <b>hopper</b> to eat · <kbd>M</kbd></span>
+    <span class="chip">click anywhere to just wander</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 0 — complete</h3>
+      <p class="lede">First page of the file: twelve deliveries, and how long each one took you.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim, policies } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import './00-magazine.ref.js';
+
+const LEVEL = 'd00';
+const DELIVERIES = 12;
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 0 — magazine training' });
+
+// Two clocks are enough here: one on consumption and one on the dispenser click, which
+// is the only cue in the chamber and the thing the session exists to condition.
+const sim = createSim({
+  seed,
+  strain: playerStrain(),
+  gamma: 0.99, alpha: 0.08, lambda: 0.9,
+  stimuli: {
+    eat: { bins: 44, width: 0.5 },
+    click: { bins: 14, width: 0.25 },
+  },
+  schedule: { kind: 'MAG', count: DELIVERIES, vt: 20 },
+  policy: auto ? policies.collector() : null,
+});
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    v: document.getElementById('vChart'),
+  },
+  layout: 'chamber',
+  show: ['tray'],
+  speed: auto ? 8 : 1,
+  onFrame: updateReadouts,
+});
+
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+// The strain is rolled once per player and carried through the arc, so the
+// subject line reads it off the session rather than naming one.
+document.getElementById('strainLab').textContent = sim.strain.label;
+
+// The dispenser click is the conditioned stimulus, so it sounds on delivery and not on
+// anything the subject does.
+let deliveriesHeard = 0;
+function watchDeliveries() {
+  if (sim.S.counts.deliveries > deliveriesHeard) {
+    deliveriesHeard = sim.S.counts.deliveries;
+    sfx.click();
+  }
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || sim.S.done) return;
+  if (e.key === 'm' || e.key === 'M' || e.code === 'Space') { e.preventDefault(); rig.goTo('tray'); }
+});
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  lat: document.getElementById('latLab'),
+};
+const latCanvas = document.getElementById('latChart');
+const LAT_HEIGHT = 132;
+
+let shown = false;
+function updateReadouts() {
+  const S = sim.S;
+  watchDeliveries();
+  els.phase.textContent = S.done ? 'session over' : 'magazine training';
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.lat.textContent = S.counts.eats + ' of ' + DELIVERIES + ' collected';
+  drawLatencies();
+  if (S.done && !shown) { shown = true; setTimeout(debrief, auto ? 200 : 900); }
+}
+
+/** Seconds from each delivery to the collection that followed it, recomputed on collection. */
+let latCache = [];
+let latAt = -1;
+function latencies() {
+  if (sim.S.counts.eats === latAt) return latCache;
+  latAt = sim.S.counts.eats;
+  latCache = sim.metrics().approachLatencies;
+  return latCache;
+}
+
+/**
+ * The live version of the debrief figure: one bar per collection, against the same
+ * one-second line the printed figure draws.
+ */
+function drawLatencies() {
+  const w = latCanvas.clientWidth || 300;
+  const h = LAT_HEIGHT;
+  const dpr = devicePixelRatio || 1;
+  if (latCanvas.width !== Math.round(w * dpr)) {
+    latCanvas.width = Math.round(w * dpr);
+    latCanvas.height = Math.round(h * dpr);
+    latCanvas.style.height = h + 'px';
+  }
+  const ctx = latCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const c = rig.colors;
+  ctx.clearRect(0, 0, w, h);
+
+  const lat = latencies();
+  const yMax = Math.min(12, Math.max(5, Math.ceil(Math.max(4, ...lat) * 1.15)));
+  const pad = 6;
+  const Y = (v) => h - pad - ((h - pad * 2) * Math.min(v, yMax)) / yMax;
+  const bw = (w - pad * 2) / DELIVERIES;
+
+  ctx.strokeStyle = c.paperGrid || c.hair;
+  ctx.lineWidth = 1;
+  for (let s = 0; s <= yMax; s += yMax > 6 ? 2 : 1) {
+    ctx.beginPath(); ctx.moveTo(pad, Y(s)); ctx.lineTo(w - pad, Y(s)); ctx.stroke();
+  }
+  ctx.save();
+  ctx.strokeStyle = c.accent; ctx.setLineDash([2, 3]); ctx.globalAlpha = 0.8;
+  ctx.beginPath(); ctx.moveTo(pad, Y(1)); ctx.lineTo(w - pad, Y(1)); ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = c.accent;
+  lat.forEach((v, i) => {
+    const x = pad + i * bw + bw * 0.2;
+    ctx.fillRect(x, Y(v), bw * 0.6, h - pad - Y(v));
+  });
+}
+
+rig.start();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  metrics = sim.metrics();
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-magazine-training.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, schedule: sim.cfg.schedule },
+    metrics,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    weights: Array.from(sim.weights()),
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d00-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

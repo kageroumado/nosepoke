@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>The colony rack</h1>
+    <p>Ten sessions by day, five nights of planning, and a place at the end that is not a
+      chamber. Every trace you will see is a learning model running on what you actually do.</p>
+    <p id="subject"></p>
+  </section>
+
+  <div class="rack" id="rack"></div>
+
+  <div class="grid2" style="margin-top:22px">
+    <section class="card colony">
+      <h2>Colony <span class="live" id="colonyCount">0 rats</span></h2>
+      <div id="colonyList"></div>
+      <div class="field">
+        <input id="codeIn" placeholder="paste a rat's share code" spellcheck="false" autocomplete="off">
+        <button class="btn primary" id="importBtn">Watch it run</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>What the traces are</h2>
+      <div class="body">
+        <p style="margin:0 0 9px;font-size:13.5px;color:var(--ink-2)">
+          A trained rat <b>is</b> its learned value function. The share code carries the strain,
+          the seed, and the weights, so importing one and watching it work is watching that
+          animal's own predictions play out on a schedule it has never seen.
+        </p>
+        <p style="margin:0;font-size:13.5px;color:var(--ink-2)">
+          Finishing a session adds your rat to the rack with its code.
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    nosepoke — reward-side operant paradigms, played straight. <code>kagerou.glass</code>
+  </footer>
+</div>
+
+<div class="veil" id="watchVeil">
+  <div class="sheet">
+    <div class="inner">
+      <h3 id="watchTitle">Imported rat</h3>
+      <p class="lede" id="watchLede">Fixed interval, twelve seconds, ten reinforcers. Nobody is driving.</p>
+      <div class="figmat">
+        <canvas id="watchArena" class="arena"></canvas>
+        <div class="strip" style="padding:8px 0 0">
+          <div class="lab"><span>dopamine (ΔF/F)</span><span id="watchClock">00:00</span></div>
+          <canvas id="watchDA" height="80"></canvas>
+        </div>
+      </div>
+      <div class="stats" id="watchStats"></div>
+      <div class="actions">
+        <button class="btn" id="watchClose">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { LEVELS, levelState, href } from './shared/levels.js';
+import { load, addRat, isComplete, levelMetrics, playerStrain } from './shared/save.js';
+import { mountShell } from './shared/shell.js';
+import { createSim, policies, STRAINS } from './shared/sim.js';
+import { mountRig } from './shared/rig.js';
+
+mountShell({ subtitle: 'the colony rack', phase: 'day' });
+
+// The subject line: the strain is rolled once and is the same animal on every page.
+{
+  const strain = STRAINS[playerStrain()];
+  document.getElementById('subject').textContent =
+    `Subject 23 is a ${strain.label}: ${strain.note}. That is your rat, on every page.`;
+}
+
+// --- the rack ------------------------------------------------------------
+const rack = document.getElementById('rack');
+for (const lv of LEVELS) {
+  const state = levelState(lv.id);
+  const el = document.createElement(state === 'locked' ? 'div' : 'a');
+  el.className = 'cage';
+  el.dataset.state = state;
+  el.dataset.phase = lv.phase;
+  if (state !== 'locked') el.href = href(lv.id);
+
+  const bars = document.createElement('span');
+  bars.className = 'bars';
+  for (let i = 0; i < 7; i++) bars.append(document.createElement('i'));
+
+  const id = document.createElement('div');
+  id.className = 'id';
+  id.textContent = lv.phase === 'night' ? 'night · ' + lv.id : lv.id;
+
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = lv.title;
+
+  const what = document.createElement('p');
+  what.className = 'what';
+  what.textContent = lv.what;
+
+  const st = document.createElement('div');
+  st.className = 'state';
+  st.textContent = stateLine(lv, state);
+
+  el.append(bars, id, title, what, st);
+  rack.append(el);
+}
+
+function stateLine(lv, state) {
+  if (state === 'locked') {
+    const need = lv.requires.filter((r) => !isComplete(r));
+    return need.length ? 'locked — finish ' + need.join(', ') : 'locked';
+  }
+  if (state === 'done') {
+    const m = levelMetrics(lv.id);
+    if (m && m.fryIndex != null && lv.id === 'd05') return 'complete — index of curvature ' + m.fryIndex.toFixed(2);
+    if (m && m.responses != null) return 'complete — ' + m.responses + ' responses';
+    return 'complete';
+  }
+  return 'ready';
+}
+
+// --- the colony ----------------------------------------------------------
+const colonyList = document.getElementById('colonyList');
+function paintColony() {
+  const rats = load().colony;
+  document.getElementById('colonyCount').textContent = rats.length + (rats.length === 1 ? ' rat' : ' rats');
+  colonyList.replaceChildren();
+  if (!rats.length) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const p = document.createElement('span');
+    p.className = 'meta';
+    p.textContent = 'empty — finish a session, or paste a code below';
+    row.append(p);
+    colonyList.append(row);
+    return;
+  }
+  for (const r of rats) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const name = document.createElement('b');
+    name.textContent = r.name || 'unnamed';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const strain = STRAINS[r.strain];
+    meta.textContent = (strain ? strain.label : r.strain || '?') + ' · ' + (r.level || '—');
+    const spacer = document.createElement('div');
+    spacer.className = 'spacer';
+    const code = document.createElement('code');
+    code.textContent = r.code;
+    code.title = 'click to copy';
+    code.style.cursor = 'pointer';
+    code.addEventListener('click', () => {
+      navigator.clipboard && navigator.clipboard.writeText(r.code);
+      code.textContent = 'copied';
+      setTimeout(() => { code.textContent = r.code; }, 1200);
+    });
+    const watch = document.createElement('button');
+    watch.className = 'btn';
+    watch.style.padding = '4px 10px';
+    watch.textContent = 'watch';
+    watch.addEventListener('click', () => watchRat(r.code, r.name));
+    row.append(name, meta, spacer, code, watch);
+    colonyList.append(row);
+  }
+}
+paintColony();
+
+// --- watch an imported rat ----------------------------------------------
+const veil = document.getElementById('watchVeil');
+let watchRig = null;
+
+document.getElementById('importBtn').addEventListener('click', () => {
+  const code = document.getElementById('codeIn').value.trim();
+  if (!code) return;
+  try {
+    watchRat(code, 'Imported rat', true);
+  } catch (err) {
+    document.getElementById('codeIn').value = '';
+    document.getElementById('codeIn').placeholder = 'that code did not parse';
+  }
+});
+
+/**
+ * Run day 5 on an imported rat. The weights come from the code; the actions come from
+ * the synthetic policy with latency drawn from that rat's own vigor.
+ */
+function watchRat(code, name, alsoSave) {
+  const sim = createSim.deserialize(code, {
+    stimuli: { eat: { bins: 44, width: 0.5 }, click: { bins: 14, width: 0.25 } },
+    schedule: { kind: 'FI', interval: 12, count: 10 },
+    policy: policies.scalloping({ interval: 12 }),
+    gamma: 0.99, alpha: 0.08, lambda: 0.9,
+  });
+  if (alsoSave) {
+    addRat({ name, level: 'imported', strain: sim.imported.strain, code });
+    paintColony();
+    document.getElementById('codeIn').value = '';
+  }
+
+  const strain = STRAINS[sim.imported.strain];
+  document.getElementById('watchTitle').textContent = name + ' — ' + (strain ? strain.label : sim.imported.strain);
+  document.getElementById('watchLede').textContent =
+    'Fixed interval, twelve seconds, ten reinforcers. Nobody is driving: the weights in the code are.';
+  document.getElementById('watchStats').replaceChildren();
+  veil.classList.add('show');
+
+  if (watchRig) watchRig.stop();
+  watchRig = mountRig({
+    sim,
+    arenaEl: document.getElementById('watchArena'),
+    charts: { da: document.getElementById('watchDA') },
+    layout: 'chamber',
+    show: ['port', 'tray'],
+    speed: 8,
+    onFrame() {
+      const mm = String(Math.floor(sim.S.t / 60)).padStart(2, '0');
+      const ss = String(Math.floor(sim.S.t % 60)).padStart(2, '0');
+      document.getElementById('watchClock').textContent = mm + ':' + ss;
+      if (sim.S.done && !sim._reported) { sim._reported = true; report(sim); }
+    },
+  });
+  watchRig.start();
+}
+
+function report(sim) {
+  const m = sim.metrics();
+  const stats = document.getElementById('watchStats');
+  stats.replaceChildren();
+  const rows = [
+    [m.responses, 'nosepokes'],
+    [m.fryIndex.toFixed(2), 'index of curvature'],
+    [m.reinforcers, 'reinforcers'],
+    [(m.meanTonic * 100).toFixed(0) + '%', 'mean tonic DA'],
+  ];
+  for (const [v, label] of rows) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = v;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+}
+
+document.getElementById('watchClose').addEventListener('click', () => {
+  veil.classList.remove('show');
+  if (watchRig) { watchRig.stop(); watchRig = null; }
+});
+veil.addEventListener('click', (e) => {
+  if (e.target === veil) document.getElementById('watchClose').click();
+});
+</script>
+</body>
+</html>

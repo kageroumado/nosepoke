@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — blocking</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Session 3 — compound conditioning</h1>
+    <p>Phase A pairs a tone with sucrose, twenty trials. Phase B adds a light to the tone and
+      changes nothing else: same tone, same sucrose, twenty more trials. The light is then
+      presented once on its own.</p>
+    <p id="puzzle"><b>Before the door closes.</b> The light will have been paired with sucrose
+      twenty times. When it comes on alone, will it mean anything to the subject?</p>
+    <div class="actions" id="predict">
+      <button class="btn" id="yesBtn">It will predict sucrose</button>
+      <button class="btn" id="noBtn">It will mean nothing</button>
+    </div>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Chamber 4 <small>Subject #23 · <span class="strainLab">Long-Evans</span></small><span class="live" id="phaseLab">phase A</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>Speaker on the left wall, cue light on the right. The hopper feeds itself.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>cue · delivery · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>prediction V̂</span><span>TD(λ)</span></div>
+        <canvas id="vChart" height="44"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>value at cue onset</span><span id="trialLab">trial 0 of 20</span></div>
+        <div class="vitals">
+          <div class="v"><label>tone <b id="vToneNum">0.000</b></label><div class="meter"><i id="vToneBar" style="width:0%"></i></div></div>
+        </div>
+        <div class="vitals">
+          <div class="v"><label>light <b id="vLightNum">0.000</b></label><div class="meter"><i id="vLightBar" style="width:0%"></i></div></div>
+        </div>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>speaker</b>, the <b>light</b>, or the <b>hopper</b> to send the subject there</span>
+    <span class="chip">the hopper feeds itself; where the subject waits is the measurement</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 3 — complete</h3>
+      <p class="lede">A second subject was run alongside yours on the same schedule, minus the tone.
+        Its record came back with the figure.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim, policies } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { blockingConfig, runBlockingControl, blockingRatio } from './03-blocking.ref.js';
+
+const LEVEL = 'd03';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 3 — blocking' });
+
+// The subject and the control differ in one thing only: whether phase A happened.
+// Everything else, the seed included, is shared, so the comparison is the pretraining.
+const sim = createSim({
+  ...blockingConfig({ seed }),
+  strain: playerStrain(),
+  policy: auto ? policies.goalTracker() : null,
+});
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    v: document.getElementById('vChart'),
+  },
+  layout: 'chamber',
+  show: ['tray', 'speaker', 'light'],
+  speed: auto ? 14 : 1,
+  onFrame: updateReadouts,
+});
+
+// The cue light is scenery in most sessions. Here it is the question, so the subject
+// is allowed to go and stand under it.
+rig.props.light.action = 'approach';
+
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+
+// The tone and the dispenser click are the two things the subject can hear, so they
+// are the two things the player hears. Events are read forward once each.
+let heard = 0;
+function watchAudio() {
+  const events = sim.S.events;
+  for (; heard < events.length; heard++) {
+    const e = events[heard];
+    if (e.type === 'cue' && e.name === 'tone' && !auto) sfx.tone(true, 2);
+    else if (e.type === 'delivery') sfx.click();
+  }
+}
+
+const PHASES = { start: 'ready', pretrain: 'phase A — tone', compound: 'phase B — tone + light', test: 'test — light alone', done: 'session over' };
+const PHASE_TRIALS = { pretrain: 20, compound: 20, test: 1 };
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  trial: document.getElementById('trialLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  vTone: document.getElementById('vToneNum'),
+  vLight: document.getElementById('vLightNum'),
+  vToneBar: document.getElementById('vToneBar'),
+  vLightBar: document.getElementById('vLightBar'),
+};
+
+/** Value bars are read against a fixed ceiling so the two cues stay comparable. */
+const VALUE_CEILING = 0.3;
+
+let shown = false;
+function updateReadouts() {
+  const S = sim.S;
+  watchAudio();
+  els.phase.textContent = PHASES[S.done ? 'done' : S.phase] || S.phase;
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const trial = lastTrial();
+  els.trial.textContent = trial
+    ? `trial ${trial.n} of ${PHASE_TRIALS[S.phase] || 20}`
+    : 'trial 0 of 20';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  paintValue(els.vTone, els.vToneBar, S.values.tone);
+  paintValue(els.vLight, els.vLightBar, S.values.light);
+  if (S.done && !shown) { shown = true; setTimeout(debrief, auto ? 200 : 900); }
+}
+function paintValue(numEl, barEl, v) {
+  numEl.textContent = (v || 0).toFixed(3);
+  barEl.style.width = Math.max(0, Math.min(100, ((v || 0) / VALUE_CEILING) * 100)).toFixed(0) + '%';
+}
+function lastTrial() {
+  for (let i = sim.S.events.length - 1; i >= 0; i--) if (sim.S.events[i].type === 'trial') return sim.S.events[i];
+  return null;
+}
+
+// --- the prediction ------------------------------------------------------
+// The puzzle is the level, so the player answers it before the first trial and reads
+// their own answer back at the debrief.
+let prediction = null;
+const predictEls = document.getElementById('predict');
+function begin(answer) {
+  prediction = answer;
+  predictEls.replaceChildren();
+  const p = document.createElement('p');
+  p.innerHTML = answer === 'nothing'
+    ? 'Logged: <b>the light will mean nothing</b>. Forty-one trials.'
+    : 'Logged: <b>the light will predict sucrose</b>. Forty-one trials.';
+  document.getElementById('puzzle').replaceWith(p);
+  rig.start();
+}
+document.getElementById('yesBtn').addEventListener('click', () => begin('sucrose'));
+document.getElementById('noBtn').addEventListener('click', () => begin('nothing'));
+
+rig.draw();
+if (auto) begin('nothing');
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  const control = runBlockingControl({ seed });
+  metrics = { ...sim.metrics(), vControl: control.metrics().vLight, prediction };
+  metrics.blockingRatio = blockingRatio(metrics.vLight, metrics.vControl);
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-blocking.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, schedule: sim.cfg.schedule },
+    metrics,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    weights: Array.from(sim.weights()),
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d03-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

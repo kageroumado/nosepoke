@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — the lookout</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  /* A canvas with only its width constrained keeps the intrinsic ratio of its width
+     and height attributes, and the rig then locks that inflated height in. Naming the
+     height here settles it on the first frame. */
+  #daChart { height: 118px; }
+  #evChart { height: 26px; }
+  #vChart { height: 44px; }
+  #cumChart { height: 132px; }
+  .tally { display: flex; gap: 16px; flex-wrap: wrap; padding: 10px 14px 12px; border-top: 1px solid var(--hair); }
+  .tally div { flex: 1; min-width: 108px; }
+  .tally label { font-size: 10.5px; font-family: var(--font-data); color: var(--ink-3); display: block; }
+  .tally b { font-family: var(--font-data); font-size: 16px; font-weight: 600; color: var(--ink); }
+  .tally .seen b { color: var(--pulse-down); }
+  .tally .counted b { color: var(--pulse-up); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Night two — the lookout</h1>
+    <p>The guard walks the corridor on a schedule. Peek through the crack while he is still out there
+      and he sees you; wait too long and the round goes by uncounted. Nothing in this room will tell
+      you how long the round is.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Corridor door, 03:15 <small>Subject #23 · <span class="strainLab">Wistar</span></small><span class="live" id="phaseLab">holding</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">the colony · Nine keeps the log</span>
+        <p id="note"><em>Boots, four rooms off, coming this way at the same pace they always do.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>The watch <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>peek · round · seed</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>cumulative peeks</span><span id="cumLab">0 peeks</span></div>
+        <canvas id="cumChart" height="132"></canvas>
+      </div>
+      <div class="tally">
+        <div class="counted"><label>rounds counted</label><b id="countedLab">0 / 8</b></div>
+        <div class="seen"><label>seen at the crack</label><b id="seenLab">0</b></div>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>crack</b> to peek · <kbd>space</kbd></span>
+    <span class="chip">click the <b>stash</b> to take your seed · <kbd>M</kbd></span>
+    <span class="chip">click the <b>nest</b> to sit back down</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Night two — the rounds</h3>
+      <p class="lede">Nine laid tonight's sheet over the one from the chamber and held both up to the
+        light, which is a thing Nine had clearly been waiting to do.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import './02-lookout.ref.js';
+import { watchRecord, dayFiveRecord } from './02-lookout.ref.js';
+import { speak } from './colony.js';
+import { createSim, policies } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+
+const LEVEL = 'n02';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 41;
+
+/** The guard's round, in seconds. Withheld from the player, as a fixed interval is. */
+const ROUND = 11;
+/** Rounds that make a full count. */
+const ROUNDS = 8;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'night 2 — the lookout' });
+
+const sim = createSim({
+  seed,
+  strain: 'wistar',
+  gamma: 0.99, alpha: 0.08, lambda: 0.9,
+  stimuli: {
+    eat: { bins: 44, width: 0.5 },
+    click: { bins: 14, width: 0.25 },
+  },
+  schedule: { kind: 'FI', interval: ROUND, count: ROUNDS, warmup: false },
+  policy: auto ? policies.scalloping({ interval: ROUND }) : null,
+});
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    cum: document.getElementById('cumChart'),
+  },
+  layout: 'colony',
+  show: ['door'],
+  speed: auto ? 6 : 1,
+  onFrame: updateReadouts,
+});
+
+// The crack sits beside the corridor door; the stash and the nest are behind you.
+rig.addProp('crack', { x: rig.arena.w - 96, y: rig.arena.h / 2, r: 26, kind: 'port', action: 'poke', stand: [-44, 0] });
+rig.addProp('stash', { x: rig.arena.w - 178, y: rig.arena.h - 84, r: 30, kind: 'tray', action: 'eat', stand: [30, -18] });
+rig.addProp('nest', { x: 128, y: rig.arena.h - 104, r: 44, kind: 'nest', action: 'approach', stand: [50, 0] });
+
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+
+// A peek that pays is a counted round; one that does not is a peek the corridor was
+// still occupied for. The distinction is drawn from the events, never scripted.
+let deliveriesHeard = 0;
+rig.on('poke', () => {
+  if (sim.S.counts.deliveries > deliveriesHeard) {
+    deliveriesHeard = sim.S.counts.deliveries;
+    sfx.click();
+  } else {
+    sfx.poke();
+    startle();
+  }
+});
+
+const arenaEl = document.getElementById('arena');
+function startle() {
+  arenaEl.animate(
+    [{ opacity: 1 }, { opacity: 0.55 }, { opacity: 1 }],
+    { duration: 260, easing: 'ease-out' },
+  );
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || sim.S.done) return;
+  if (e.code === 'Space') { e.preventDefault(); rig.goTo('crack'); }
+  else if (e.key === 'm' || e.key === 'M') rig.goTo('stash');
+});
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  cum: document.getElementById('cumLab'),
+  counted: document.getElementById('countedLab'),
+  seen: document.getElementById('seenLab'),
+};
+
+let spoken = 0;
+let shown = false;
+
+function updateReadouts() {
+  const S = sim.S;
+  const rec = watchRecord(sim);
+  if (spoken === 0) { speak(sim, LEVEL, 0); spoken = 1; }
+  else if (spoken === 1 && rec.counted >= 2) { speak(sim, LEVEL, 1); spoken = 2; }
+
+  els.phase.textContent = S.done ? 'the corridor is quiet' : rec.counted ? 'round ' + (rec.counted + 1) : 'holding';
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.cum.textContent = S.counts.pokes + ' peeks';
+  els.counted.textContent = rec.counted + ' / ' + ROUNDS;
+  els.seen.textContent = String(rec.seen);
+  if (S.done && !shown) {
+    shown = true;
+    speak(sim, LEVEL, 2);
+    setTimeout(debrief, auto ? 200 : 900);
+  }
+}
+
+rig.start();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  const rec = watchRecord(sim);
+  metrics = sim.metrics();
+  metrics.roundsCounted = rec.counted;
+  metrics.peeksSeen = rec.seen;
+  metrics.roundsLate = rec.late;
+  metrics.meanOverrun = rec.meanOverrun;
+  // Resolved once, so the figure, the stats, and the paragraphs all read the same
+  // day-five session even if the save changes underneath them.
+  metrics.dayFive = dayFiveRecord();
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  // The resolved day-five session is a convenience for the figure and would bloat the
+  // saved record, so it does not travel with the metrics that get written down.
+  const saved = { ...metrics };
+  delete saved.dayFive;
+  completeLevel(LEVEL, saved);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, saved), events: sim.S.events, metrics: saved });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, saved);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-lookout.png');
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

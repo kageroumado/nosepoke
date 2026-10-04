@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — effort-based choice</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  /* The choice record, one mark per trial, filled as the trial is decided. */
+  .tally { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .tally i {
+    width: 9px; height: 9px;
+    border-radius: 3px;
+    border: 1px dashed var(--hair);
+  }
+  .tally i.barrier { background: var(--accent); border: 1px solid var(--accent); }
+  .tally i.flat { border: 1px solid var(--ink-3); }
+  .tally + .lab { margin-top: 9px; }
+  .meter.climb i { background: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Session 3 — cost and benefit</h1>
+    <p>A T-maze, both arms baited. The left arm holds four pellets behind a barrier. The right
+      arm holds two and nothing in the way. Twenty trials, then the procedure is repeated.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Maze 2 <small>Subject #23 · <span class="strainLab">Wistar</span></small><span class="live" id="phaseLab">trial 1</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>The barrier is a plank of gray plastic, taller than the subject.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>press · delivery · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>choice record</span><span id="armLab">solid = barrier arm</span></div>
+        <div class="tally" id="tally1"></div>
+        <div class="lab" id="tally2Lab" hidden><span>second session</span><span></span></div>
+        <div class="tally" id="tally2" hidden></div>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="v"><label>the climb</label><div class="meter climb"><i id="climbBar" style="width:0%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>barrier</b> arm · <kbd>←</kbd></span>
+    <span class="chip">click the <b>open</b> arm · <kbd>→</kbd></span>
+    <span class="chip">on the barrier, keep pressing to climb · <kbd>space</kbd></span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="gate">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 3, run 2</h3>
+      <p class="lede">Twenty trials recorded. The maze is reset for the second run.</p>
+      <div class="explain" style="border-top:0;padding-top:0">
+        <p>Subject #23 receives 0.1 mg/kg haloperidol thirty minutes before this run. The maze,
+          the barrier, and the bait are unchanged: four pellets on the left, two on the right.</p>
+      </div>
+      <div class="actions"><button class="btn primary" id="gateBtn">Run the second session</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 3 — complete</h3>
+      <p class="lede" id="lede">Both runs on one sheet, in the folder that goes to the study sponsor.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim, policies } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, disclose, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { choiceConfig, pelletsDelivered, latencyAt, CHOICE_TRIALS } from './07-choice.session.js';
+import { fieldNote } from './07-choice.ref.js';
+
+const LEVEL = 'd07';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 7 — effort-based choice' });
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  climb: document.getElementById('climbBar'),
+  note: document.getElementById('note'),
+};
+
+/** The tally rows, one mark per trial, built empty and filled as trials are decided. */
+const tallies = [document.getElementById('tally1'), document.getElementById('tally2')];
+for (const row of tallies) {
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < CHOICE_TRIALS; i++) frag.append(document.createElement('i'));
+  row.replaceChildren(frag);
+}
+
+let sim = null;
+let rig = null;
+let run = 0;                 // 0 undrugged, 1 under haloperidol
+let baseline = null;         // metrics from run 0
+let baselineEvents = null;   // run 0's own event log, kept for the record and the refusal count
+let cursor = 0;              // index into sim.S.events, for draining new events
+let arm = null;              // the arm chosen this trial
+let needPresses = 0;         // presses the barrier is charging this trial
+let donePresses = 0;
+let trial = 0;
+let shown = false;
+
+/** Where the rat stands to work at a prop. */
+function stand(name) {
+  const p = rig.props[name];
+  const s = p.stand || [0, 0];
+  return { x: p.x + s[0], y: p.y + s[1] };
+}
+
+/**
+ * Put the rat at a prop without going through the response queue. Returning the subject
+ * to the start box and carrying it to the goal box are the apparatus moving it between
+ * trials, so they must not queue behind the vigor latency where they could overtake a
+ * choice the player has already made.
+ */
+function stage(name) {
+  const s = stand(name);
+  rig.rat.target = { x: s.x, y: s.y };
+  rig.rat.action = null;
+  rig.rat.targetProp = name;
+}
+
+/** Walk to a prop, without restarting the walk that is already going there. */
+function walkTo(name) {
+  if (!sim || sim.S.done || needPresses) return;
+  if (rig.rat.targetProp !== name) rig.goTo(name);
+}
+
+/** One press against the barrier. The delay is the rig's, which is the vigor model's. */
+function mash() {
+  if (!sim || sim.S.done || arm !== 'barrier') return;
+  rig.intend(() => { rig.rat.poseT = 1; if (sim.press()) sfx.press(); });
+}
+
+/** Read every event the sim has produced since the last frame and stage the arena on it. */
+function drain() {
+  const ev = sim.S.events;
+  for (; cursor < ev.length; cursor++) {
+    const e = ev[cursor];
+    if (e.type === 'trial') {
+      trial = e.n;
+      arm = null; needPresses = 0; donePresses = 0;
+      stage('start');
+    } else if (e.type === 'choose') {
+      arm = e.arm;
+      const mark = tallies[run].children[trial - 1];
+      if (mark) mark.className = e.arm;
+    } else if (e.type === 'barrier') {
+      needPresses = e.presses; donePresses = 0;
+    } else if (e.type === 'press' && arm === 'barrier' && needPresses) {
+      donePresses = Math.min(needPresses, donePresses + 1);
+    } else if (e.type === 'delivery') {
+      needPresses = 0; donePresses = 0;
+      stage(arm === 'barrier' ? 'trayBarrier' : 'trayFlat');
+      sfx.click();
+    } else if (e.type === 'consume') {
+      sfx.crunch();
+    }
+  }
+}
+
+/** The rat works its way up the barrier as the presses land. */
+function climb() {
+  if (!needPresses || rig.rat.target) return;
+  const foot = stand('barrier');
+  const top = { x: rig.props.barrier.x - 34, y: rig.props.barrier.y - 26 };
+  const f = donePresses / needPresses;
+  rig.rat.x = foot.x + (top.x - foot.x) * f;
+  rig.rat.y = foot.y + (top.y - foot.y) * f;
+  rig.rat.angle = Math.atan2(top.y - foot.y, top.x - foot.x);
+}
+
+function updateReadouts() {
+  const S = sim.S;
+  drain();
+  climb();
+  els.phase.textContent = S.done
+    ? (run === 0 ? 'run 1 complete' : 'session over')
+    : 'trial ' + Math.min(trial || 1, CHOICE_TRIALS) + ' of ' + CHOICE_TRIALS;
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.climb.style.width = needPresses ? ((donePresses / needPresses) * 100).toFixed(0) + '%' : '0%';
+  if (S.done && !shown) { shown = true; setTimeout(finishRun, auto ? 200 : 800); }
+}
+
+/**
+ * Start a run. The arena canvas is replaced first so the previous run's rig keeps
+ * neither its pointer handler nor a claim on the finished session.
+ */
+function startRun(haloperidol) {
+  if (rig) rig.stop();
+  const old = document.getElementById('arena');
+  const fresh = old.cloneNode(false);
+  old.replaceWith(fresh);
+
+  sim = createSim({ ...choiceConfig({
+    seed: seed + (haloperidol ? 1 : 0),
+    haloperidol,
+    policy: auto ? policies.chooser() : null,
+  }), strain: playerStrain() });
+  cursor = 0; arm = null; needPresses = 0; donePresses = 0; trial = 0; shown = false;
+
+  rig = mountRig({
+    sim,
+    arenaEl: fresh,
+    charts: { da: document.getElementById('daChart'), ev: document.getElementById('evChart') },
+    layout: 'tmaze',
+    speed: auto ? 6 : 1,
+    onFrame: updateReadouts,
+    onTap(prop) {
+      if (needPresses) { mash(); return false; }
+      if (prop) walkTo(prop);
+      return false;
+    },
+  });
+  shell.bindNotes(sim, els.note);
+  rig.start();
+  window.nosepoke = { sim, rig, shell, level: LEVEL, run: haloperidol ? 1 : 0 };
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || !sim || sim.S.done) return;
+  if (e.code === 'Space') { e.preventDefault(); mash(); }
+  else if (e.code === 'ArrowLeft') { e.preventDefault(); walkTo('barrier'); }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); walkTo('flat'); }
+});
+
+/** End of a run: either open the gate to the second one, or write the debrief. */
+function finishRun() {
+  const metrics = sim.metrics();
+  metrics.pellets = pelletsDelivered(sim.S.events);
+  if (run === 0) {
+    baseline = metrics;
+    baselineEvents = sim.S.events;
+    addRecord({ level: 'd07 undrugged', seed, share: '', events: baselineEvents, metrics });
+    document.getElementById('tally2Lab').hidden = false;
+    document.getElementById('tally2').hidden = false;
+    document.getElementById('gate').classList.add('show');
+    if (auto) setTimeout(() => document.getElementById('gateBtn').click(), 500);
+    return;
+  }
+  debrief(metrics);
+}
+
+document.getElementById('gateBtn').addEventListener('click', () => {
+  document.getElementById('gate').classList.remove('show');
+  run = 1;
+  // Disclosed as it is applied rather than at the debrief, so the log is right even for a
+  // player who closes the tab mid-session. The tonic estimate is the input latency, so the
+  // baseline figure beside it is what the second run is measured against.
+  disclose('haloperidol', {
+    level: LEVEL,
+    tonicGain: 0.5,
+    baselineLatency: latencyAt(baseline.meanTonic),
+    baselineFraction: baseline.barrierFraction,
+  });
+  startRun(true);
+});
+
+// --- the debrief ---------------------------------------------------------
+
+/**
+ * One session reduced to what is read back later. The epilogue keys on `barrierFraction`
+ * inside `baseline` and `haloperidol`, and the debrief figure draws a line per session
+ * from `blocks`.
+ *
+ * @param {object} m the session's own `sim.metrics()`
+ */
+function half(m) {
+  return {
+    barrierFraction: m.barrierFraction,
+    barrierChoices: m.barrierChoices,
+    trials: m.trials,
+    blocks: m.blocks,
+    pellets: m.pellets,
+    consumed: m.consumed,
+    meanTonic: m.meanTonic,
+  };
+}
+
+let merged = null;
+function debrief(halo) {
+  const refusals = baselineEvents.filter((e) => e.type === 'refuse').length
+    + sim.S.events.filter((e) => e.type === 'refuse').length;
+
+  merged = Object.assign({}, halo, {
+    baseline: half(baseline),
+    haloperidol: half(halo),
+    baselineFraction: baseline.barrierFraction,
+    haloperidolFraction: halo.barrierFraction,
+    shiftRatio: baseline.barrierFraction > 0 ? halo.barrierFraction / baseline.barrierFraction : 1,
+    baselinePellets: baseline.pellets,
+    haloperidolPellets: halo.pellets,
+    consumedTotal: baseline.consumed + halo.consumed,
+    refusals,
+    baselineLatency: latencyAt(baseline.meanTonic),
+    haloperidolLatency: latencyAt(halo.meanTonic),
+  });
+
+  sim.note(fieldNote(merged));
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics: merged });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, merged, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, merged, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = merged;
+  completeLevel(LEVEL, merged);
+  addRecord({ level: 'd07 haloperidol', seed, share: shareText(LEVEL, merged), events: sim.S.events, metrics: merged });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, merged);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics: merged }, 'nosepoke-effort-choice.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, schedule: sim.cfg.schedule },
+    metrics: merged,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    weights: Array.from(sim.weights()),
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d07-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+
+startRun(false);
+</script>
+</body>
+</html>

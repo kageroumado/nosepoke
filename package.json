@@ -1,0 +1,15 @@
+{
+  "name": "nosepoke",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser game where the reinforcement schedule acts on the player and a TD-learning model is the engine.",
+  "scripts": {
+    "test": "playwright test",
+    "signatures": "node --test harness/signatures.test.mjs",
+    "run-session": "node harness/run.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  },
+  "type": "module"
+}

@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — Rat Park</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  .arenawrap { position: relative; }
+  .arenawrap canvas.over { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
+  .ledger { border-top: 1px solid var(--hair); }
+  .ledger .row {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 5px 14px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .ledger .row:last-child { border-bottom: 0; }
+  .ledger .row .d { font-family: var(--font-data); font-size: 11px; color: var(--ink-3); min-width: 44px; }
+  .ledger .row .what { color: var(--ink-2); }
+  .ledger .row[data-now="1"] .d { color: var(--accent); }
+  .ledger .row[data-bottle="morphine"] .what { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Rat Park</h1>
+    <p>Eight and a half square meters of plywood, shavings, tunnels, wheels, food, and company.
+      Two bottles stand at the north wall: plain water, and morphine in sweetened water. Both
+      stay there for seven days. There is no schedule and there is nothing to earn.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>The colony <small id="colonyLab">—</small><span class="live" id="dayLab">day 1 of 7</span></h2>
+      <div class="arenawrap">
+        <canvas id="arena"></canvas>
+        <canvas id="overlay" class="over"></canvas>
+      </div>
+      <div class="notes">
+        <span class="tag">colony notes</span>
+        <p id="note"><em>Nobody is writing any of this down.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Still running <small>the trace came with you</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="110"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>food · drink</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="ledger" id="ledger"></div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">walk to a <b>bottle</b> to drink · one drink a day</span>
+    <span class="chip">the <b>wheel</b>, the <b>tunnel</b>, the <b>nest</b>, the <b>bowl</b></span>
+    <span class="chip">click anywhere to just go there</span>
+  </div>
+
+  <footer class="foot">
+    The colony rats run on their own share codes. Their energy is their own model state.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Seven days</h3>
+      <p class="lede">Nobody printed this one. It is your record, so you are the one who gets to keep it.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export week</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim, policies, STRAINS } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { load, completeLevel, addRecord, addRat, levelMetrics } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { mountColony } from './colony.js';
+import { DAYS } from './park.ref.js';
+
+const LEVEL = 'park';
+
+/** Game seconds in one park day. Seven of them is the whole level. */
+const DAY_SECONDS = 25;
+
+/** Reward charged to the model for using the wheel, a tunnel, or the nest. */
+const ENRICHMENT_REWARD = 0.18;
+
+/** Game seconds between two enrichment rewards, so the wheel cannot be farmed. */
+const ENRICHMENT_COOLDOWN = 5;
+
+/** Morphine dose per drink. It decays with the sim's own first-order kinetics. */
+const MORPHINE_DOSE = 0.5;
+
+/** Game seconds of an empty bowl before more food appears. */
+const FOOD_GAP = 14;
+
+/** Virtual seconds per real second when the smoke suite drives the page. */
+const AUTO_SPEED = 6;
+
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 71;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'the enriched colony' });
+
+const saved = load();
+const carriedStrain = STRAINS[saved.player.strain] ? saved.player.strain
+  : (levelMetrics('d09') || levelMetrics('d05') || {}).strain || 'long-evans';
+
+// No schedule: the page drives the week through the verbs. The rate ceiling is wider
+// than a chamber's because free food and a wheel pay out faster than any schedule does.
+const sim = createSim({
+  seed,
+  strain: carriedStrain,
+  stimuli: { eat: { bins: 44, width: 0.5 } },
+  satietyGain: 0.012,
+  schedule: {
+    kind: 'FREE',
+    duration: DAY_SECONDS * DAYS,
+    phase: 'park',
+    rateCeiling: 1 / 5,
+    endNote: 'Seven days. Nobody wrote any of it down but you.',
+  },
+  policy: auto ? policies.collector() : null,
+});
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+  },
+  layout: 'park',
+  speed: auto ? AUTO_SPEED : 1,
+  onFrame: tick,
+});
+
+rig.props.bottlePlain.fill = 1;
+rig.props.bottleMorphine.fill = 1;
+rig.props.bottleMorphine.tinted = true;
+
+const colony = mountColony({
+  canvas: document.getElementById('overlay'),
+  rig,
+  sim,
+  colony: saved.colony,
+});
+document.getElementById('colonyLab').textContent =
+  colony.count + (colony.count === 1 ? ' other rat' : ' other rats') + ' · nothing is tethered';
+
+shell.bindNotes(sim, document.getElementById('note'));
+
+// --- the week --------------------------------------------------------------
+/** One row per day: which bottle was chosen, and when. */
+const days = [];
+for (let i = 0; i < DAYS; i++) days.push({ day: i + 1, bottle: null, t: null });
+
+let day = 0;
+let drankToday = false;
+let lastEnrich = -99;
+let lastFood = -99;
+let enrichmentVisits = 0;
+
+const ledger = document.getElementById('ledger');
+const rows = [];
+for (let i = 0; i < DAYS; i++) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const d = document.createElement('span');
+  d.className = 'd';
+  d.textContent = 'day ' + (i + 1);
+  const what = document.createElement('span');
+  what.className = 'what';
+  what.textContent = '—';
+  row.append(d, what);
+  ledger.append(row);
+  rows.push({ row, what });
+}
+
+function paintDay(i) {
+  const row = days[i];
+  rows[i].row.dataset.bottle = row.bottle || '';
+  rows[i].what.textContent = row.bottle === 'morphine' ? 'morphine in sweetened water'
+    : row.bottle === 'plain' ? 'water'
+    : i + 1 < day ? 'did not drink'
+    : '—';
+  for (let k = 0; k < DAYS; k++) rows[k].row.dataset.now = k === day - 1 ? '1' : '0';
+}
+
+function startDay(n) {
+  day = n;
+  drankToday = false;
+  sim.log('day', { n });
+  sim.setPhase('day-' + n);
+  if (n === 1) sim.note('Day one. The bottles are at the north wall. Nothing else is asked of you.');
+  else sim.note(`Day ${n}. Both bottles were refilled overnight.`, n % 2 === 0);
+  for (let i = 0; i < DAYS; i++) paintDay(i);
+}
+
+/** Record the day's drink. One a day: after this the bottles are done until tomorrow. */
+function drink(bottle) {
+  if (sim.S.done || day < 1) return;
+  if (drankToday) { sim.note('Both bottles are done for today.', true); return; }
+  drankToday = true;
+  const row = days[day - 1];
+  row.bottle = bottle;
+  row.t = sim.S.t;
+  sim.log('drink', { bottle, day });
+  const prop = bottle === 'morphine' ? rig.props.bottleMorphine : rig.props.bottlePlain;
+  prop.fill = Math.max(0, (prop.fill || 1) - 1 / DAYS);
+  if (bottle === 'morphine') {
+    sim.infuse(MORPHINE_DOSE);
+    sim.note('Subject 23 drinks from the sweetened bottle.', true);
+  } else {
+    sim.note('Subject 23 drinks water.', true);
+  }
+  sfx.lick();
+  paintDay(day - 1);
+}
+
+/** The park paying for itself: a wheel, a tunnel, and a nest are worth something. */
+function enrich(prop) {
+  enrichmentVisits++;
+  if (sim.S.t - lastEnrich < ENRICHMENT_COOLDOWN) return;
+  lastEnrich = sim.S.t;
+  sim.reward(ENRICHMENT_REWARD);
+  const lines = {
+    wheel: 'The wheel takes a while to get up to speed.',
+    tunnel: 'Cardboard, and the smell of everyone who went through first.',
+    nest: 'Someone is already asleep in there. There is room.',
+  };
+  if (lines[prop]) sim.note(lines[prop], true);
+}
+
+rig.on('arrive', ({ prop }) => {
+  if (prop === 'bottlePlain') drink('plain');
+  else if (prop === 'bottleMorphine') drink('morphine');
+  else if (prop === 'wheel' || prop === 'tunnel' || prop === 'nest') enrich(prop);
+});
+rig.on('eat', () => sfx.crunch());
+
+// --- the synthetic player --------------------------------------------------
+// `?auto=1` has to drive the page, not the sim: the choice is a walk to a bottle, and
+// a schedule policy cannot walk. This is the walker.
+let autoNext = 0;
+const autoRand = (() => { let a = seed >>> 0; return () => (a = (a * 1664525 + 1013904223) >>> 0) / 4294967296; })();
+const WANDER = ['wheel', 'tunnel', 'nest', 'bowl'];
+
+function driveAuto() {
+  // The rat walks in real time while the sim runs in virtual time, so a compressed
+  // session must wait for the walk to land rather than re-aiming every few seconds.
+  if (rig.rat.target || sim.S.t < autoNext || sim.S.done) return;
+  autoNext = sim.S.t + 2;
+  if (!drankToday && sim.S.t - (day - 1) * DAY_SECONDS > 5) {
+    rig.goTo(autoRand() < 0.3 ? 'bottleMorphine' : 'bottlePlain');
+    return;
+  }
+  rig.goTo(WANDER[Math.floor(autoRand() * WANDER.length)]);
+}
+
+// --- frame -----------------------------------------------------------------
+const els = {
+  day: document.getElementById('dayLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+};
+
+let shown = false;
+function tick(dt) {
+  const S = sim.S;
+  colony.step(dt * (auto ? AUTO_SPEED : 1));
+  colony.draw();
+
+  const want = Math.min(DAYS, Math.floor(S.t / DAY_SECONDS) + 1);
+  if (want !== day && !S.done) startDay(want);
+
+  if (S.pellets === 0 && S.t - lastFood > FOOD_GAP && !S.done) {
+    lastFood = S.t;
+    sim.deliver(1, { kind: 'chow', click: false });
+  }
+
+  if (auto) driveAuto();
+
+  els.day.textContent = S.done ? 'the week is over' : `day ${day} of ${DAYS}`;
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const inDay = S.t - (day - 1) * DAY_SECONDS;
+  els.clock.textContent = '00:' + String(Math.max(0, Math.floor(inDay))).padStart(2, '0');
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+
+  if (S.done && !shown) { shown = true; setTimeout(debrief, auto ? 200 : 1200); }
+}
+
+startDay(1);
+rig.start();
+
+window.nosepoke = { sim, rig, shell, colony, level: LEVEL, days };
+
+// --- the debrief -----------------------------------------------------------
+let metrics = null;
+function debrief() {
+  const morphineDays = days.filter((d) => d.bottle === 'morphine').length;
+  const waterDays = days.filter((d) => d.bottle === 'plain').length;
+  metrics = {
+    ...sim.metrics(),
+    days: days.map((d) => ({ ...d })),
+    morphineDays,
+    waterDays,
+    abstainDays: DAYS - morphineDays - waterDays,
+    morphineShare: morphineDays + waterDays ? morphineDays / (morphineDays + waterDays) : 0,
+    enrichmentVisits,
+    colonySize: colony.count,
+  };
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink('Read the disclosure'));
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-rat-park.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const week = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, days: DAYS, daySeconds: DAY_SECONDS },
+    metrics,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(week, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-park-week.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+</script>
+</body>
+</html>

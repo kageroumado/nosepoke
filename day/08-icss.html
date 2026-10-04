@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — intracranial self-stimulation</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Session 8 — intracranial self-stimulation</h1>
+    <p>A bipolar electrode is fixed in the subject's cap and runs to a ceiling swivel. Each
+      lever press closes the circuit for one train of current. Food is available in the tray
+      throughout. The session ends after four minutes on the clock.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Chamber 4 <small>Subject #23 · <span class="strainLab">Wistar</span> · tethered</small><span class="live" id="phaseLab">electrode in place</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>The swivel turns without a sound. The tray was filled before the door closed.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Stimulation <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>press · stimulation · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>prediction V̂</span><span>TD(λ)</span></div>
+        <canvas id="vChart" height="44"></canvas>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>cumulative record</span><span id="cumLab">0 presses</span></div>
+        <canvas id="cumChart" height="132"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="v"><label id="likingLab">liking channel — 0 consumed</label><div class="meter"><i id="likeBar" style="width:0%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>lever</b> to press · hold <kbd>space</kbd></span>
+    <span class="chip">the <b>tray</b> is full if you want it · <kbd>M</kbd></span>
+    <span class="chip">the session ends on the timer</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 8 — complete</h3>
+      <p class="lede">Four minutes on the clock. The subject was still pressing when the current
+        was cut.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { icssConfig, icssPolicy, TRAY_PELLETS } from './08-icss.session.js';
+import './08-icss.ref.js';
+
+const LEVEL = 'd08';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 8 — intracranial self-stimulation' });
+
+const sim = createSim(icssConfig({ seed, strain: playerStrain(), policy: auto ? icssPolicy() : null }));
+
+// The tray is baited before the subject is placed in the chamber, so an untouched tray
+// at the end is a choice and not an empty hopper.
+sim.deliver(TRAY_PELLETS, { click: false });
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    v: document.getElementById('vChart'),
+    cum: document.getElementById('cumChart'),
+  },
+  layout: 'chamber',
+  show: ['lever', 'tray'],
+  speed: auto ? 10 : 1,
+  onFrame: updateReadouts,
+  onTap(prop) {
+    if (prop !== 'lever') return true;
+    hold = true;
+    lastPress = performance.now();
+    rig.goTo('lever');
+    return false;
+  },
+});
+
+// The tether: a catenary from the cap to a ceiling swivel that trails the subject.
+const swivel = rig.addProp('tether', { kind: 'tether', x: rig.arena.w / 2, y: 20, r: 0 });
+
+// The lever sits where the port would be, because this chamber has no port.
+rig.props.lever.y = rig.arena.h / 2;
+
+rig.on('press', () => sfx.zap());
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+
+// --- input ---------------------------------------------------------------
+// Holding the lever repeats the press. Every repeat still goes through the rig's
+// latency, so the tonic estimate sets the ceiling on the rate the same as one click.
+const REPEAT_MS = 160;
+let hold = false;
+let lastPress = 0;
+
+addEventListener('pointerup', () => { hold = false; });
+addEventListener('pointercancel', () => { hold = false; });
+addEventListener('keydown', (e) => {
+  if (sim.S.done) return;
+  if (e.code === 'Space') { e.preventDefault(); hold = true; }
+  else if (e.key === 'm' || e.key === 'M') rig.goTo('tray');
+});
+addEventListener('keyup', (e) => { if (e.code === 'Space') hold = false; });
+
+// --- readouts ------------------------------------------------------------
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  like: document.getElementById('likeBar'),
+  likeLab: document.getElementById('likingLab'),
+  cum: document.getElementById('cumLab'),
+};
+
+let shown = false;
+function updateReadouts() {
+  const S = sim.S;
+  const now = performance.now();
+  if (hold && !S.done && now - lastPress >= REPEAT_MS) {
+    lastPress = now;
+    rig.goTo('lever');
+  }
+
+  // The swivel follows the subject around the chamber, a beat behind it.
+  swivel.x += (rig.rat.x - swivel.x) * 0.04;
+
+  els.phase.textContent = S.done ? 'session over' : 'electrode in place';
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  // The liking channel is the consumption stream, and it is the only thing in this
+  // room that can move that meter.
+  els.like.style.width = Math.min(100, S.counts.eats * 16) + '%';
+  els.likeLab.textContent = 'liking channel — ' + S.counts.eats + ' consumed';
+  els.cum.textContent = S.counts.presses + ' presses';
+  if (S.done && !shown) { shown = true; hold = false; setTimeout(debrief, auto ? 200 : 900); }
+}
+
+rig.start();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  metrics = sim.metrics();
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-self-stimulation.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, schedule: sim.cfg.schedule },
+    metrics,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    weights: Array.from(sim.weights()),
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d08-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — the mess hall</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  /* A canvas with only its width constrained keeps the intrinsic ratio of its width
+     and height attributes, and the rig then locks that inflated height in. Naming the
+     height here settles it on the first frame. */
+  #daChart { height: 118px; }
+  #evChart { height: 26px; }
+  #vChart { height: 44px; }
+  #cumChart { height: 96px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Night one — the mess hall</h1>
+    <p>The janitor's cart has a wheel that squeaks, and it squeaks before it turns the corner. What
+      falls by the bin afterwards is nobody's property. Be standing there when it lands.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Colony room, 02:40 <small>Subject #23 · <span class="strainLab">Wistar</span></small><span class="live" id="phaseLab">waiting</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">the colony</span>
+        <p id="note"><em>Six of you behind the feed sacks, and one bad wheel two rooms away.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>squeak · crumbs · eat</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>prediction V̂</span><span>tone = the squeak</span></div>
+        <canvas id="vChart" height="44"></canvas>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>anticipatory approach</span><span id="cumLab">0 / 0 squeaks</span></div>
+        <canvas id="cumChart" height="96"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">the squeak comes first · <kbd>listen</kbd></span>
+    <span class="chip">click the <b>bin</b> to be there when it lands</span>
+    <span class="chip">click the <b>crumbs</b> to eat · <kbd>M</kbd></span>
+    <span class="chip">click the <b>nest</b> to wait out of sight</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Night one — the take</h3>
+      <p class="lede">Nine copied the record out onto the back of a feed label, because Nine copies
+        everything out.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import './01-mess-hall.ref.js';
+import { approachRecord } from './01-mess-hall.ref.js';
+import { speak } from './colony.js';
+import { createSim } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+
+const LEVEL = 'n01';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 41;
+
+/** Seconds the squeak plays before anything lands by the bin. */
+const SQUEAK = 2;
+/** Squeaks in a night. */
+const TRIALS = 14;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'night 1 — the mess hall' });
+
+// Two clocks: one on the squeak, one on eating. There is no dispenser in the colony
+// room, so no click clock exists and nothing fires one.
+const sim = createSim({
+  seed,
+  strain: 'wistar',
+  gamma: 0.97, lambda: 0.9,
+  stimuli: {
+    eat: { bins: 44, width: 0.5 },
+    tone: { bins: 20, width: 0.25 },
+  },
+  schedule: { kind: 'PAV', trials: TRIALS, csDur: SQUEAK, iti: [7, 12], cs: 'tone' },
+  policy: auto ? messHallRat() : null,
+});
+
+/**
+ * A synthetic colony rat. It decides once per squeak whether to move, and the odds are
+ * what the squeak is currently worth to it, so the acquisition curve under `?auto=1` is
+ * the model's own learning rather than a scripted ramp.
+ */
+function messHallRat() {
+  let lastCue = -1;
+  let decided = false;
+  return (S, api) => {
+    if (S.pellets > 0) return 'eat';
+    let cueT = null;
+    for (let i = S.events.length - 1; i >= 0; i--) {
+      const e = S.events[i];
+      if (e.type === 'delivery') break;
+      if (e.type === 'cue' && e.name === 'tone') { cueT = e.t; break; }
+    }
+    if (cueT == null) return null;
+    if (cueT !== lastCue) { lastCue = cueT; decided = false; }
+    if (decided || S.t - cueT >= SQUEAK * 0.6) return null;
+    decided = true;
+    // V(tone) reaches roughly 0.2 over a night, so the gain maps that range onto odds.
+    const want = Math.min(0.94, 0.05 + S.values.tone * 4.5);
+    return api.rand() < want ? ['approach', 'bin'] : null;
+  };
+}
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    v: document.getElementById('vChart'),
+  },
+  layout: 'colony',
+  show: ['bin', 'crumbs', 'door'],
+  speed: auto ? 6 : 1,
+  onFrame: updateReadouts,
+});
+
+// The crumbs land beside the bin, the cart passes the door, and the colony waits in
+// the nest on the far side of the room.
+rig.props.crumbs.x = 172;
+rig.props.crumbs.y = 132;
+rig.addProp('cart', { x: rig.arena.w - 118, y: 74, r: 24, kind: 'speaker', action: 'approach', stand: [-6, 44] });
+rig.addProp('nest', { x: rig.arena.w - 150, y: rig.arena.h - 108, r: 44, kind: 'nest', action: 'approach', stand: [-48, 0] });
+
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || sim.S.done) return;
+  if (e.key === 'm' || e.key === 'M') rig.goTo('crumbs');
+  else if (e.key === 'b' || e.key === 'B') rig.goTo('bin');
+});
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  cum: document.getElementById('cumLab'),
+};
+
+// The squeak is an auditory conditioned stimulus, so it sounds when the schedule
+// fires the cue and never when the crumbs arrive.
+let cuesHeard = 0;
+let spoken = 0;
+let shown = false;
+
+function updateReadouts() {
+  const S = sim.S;
+  const cues = S.events.filter((e) => e.type === 'cue' && e.name === 'tone').length;
+  if (cues > cuesHeard) {
+    cuesHeard = cues;
+    sfx.tone(true, SQUEAK);
+  }
+  if (spoken === 0) { speak(sim, LEVEL, 0); spoken = 1; }
+  else if (spoken === 1 && cuesHeard >= 4) { speak(sim, LEVEL, 1); spoken = 2; }
+
+
+  const rec = approachRecord(sim);
+  els.phase.textContent = S.done ? 'the cart is gone' : cuesHeard ? 'squeak ' + cuesHeard : 'waiting';
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.cum.textContent = rec.anticipated + ' / ' + rec.trials.length + ' squeaks';
+  drawApproachStrip(rec);
+  if (S.done && !shown) {
+    shown = true;
+    speak(sim, LEVEL, 2);
+    setTimeout(debrief, auto ? 200 : 900);
+  }
+}
+
+// A live version of the debrief figure's raster: one column per squeak, filled once
+// the subject has moved before the crumbs.
+const strip = document.getElementById('cumChart');
+function drawApproachStrip(rec) {
+  const dpr = devicePixelRatio || 1;
+  const w = strip.clientWidth || 300;
+  const h = 96;
+  if (strip.width !== Math.round(w * dpr)) {
+    strip.width = Math.round(w * dpr);
+    strip.height = Math.round(h * dpr);
+  }
+  strip.style.width = '100%';
+  strip.style.height = h + 'px';
+  const ctx = strip.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const c = rig.colors;
+  const pad = 8;
+  const cols = Math.max(rec.trials.length, TRIALS);
+  const cw = (w - pad * 2) / cols;
+  const base = h - 16;
+  ctx.fillStyle = c.paperMut;
+  ctx.font = '9px ' + c.fontData;
+  ctx.fillText('squeak', pad, h - 3);
+  ctx.fillText('early ↑', w - pad - 40, h - 3);
+
+  for (let i = 0; i < cols; i++) {
+    const t = rec.trials[i];
+    const x = pad + i * cw;
+    ctx.fillStyle = c.paperGrid;
+    ctx.fillRect(x + 1, base - 6, Math.max(2, cw - 3), 6);
+    if (!t) continue;
+    const answered = t.latency != null;
+    ctx.fillStyle = answered ? c.up : c.paperMut;
+    const bh = answered ? Math.max(10, base - 14 - (t.latency / SQUEAK) * (base - 30)) : 8;
+    ctx.fillRect(x + 1, base - 6 - bh, Math.max(2, cw - 3), bh);
+  }
+}
+
+rig.start();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  const rec = approachRecord(sim);
+  metrics = sim.metrics();
+  metrics.squeaks = rec.trials.length;
+  metrics.anticipatedSqueaks = rec.anticipated;
+  metrics.anticipationRate = rec.trials.length ? rec.anticipated / rec.trials.length : 0;
+  metrics.anticipationLatency = rec.meanLatency;
+  metrics.lateAnticipationRate = rec.lateRate;
+
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-mess-hall.png');
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

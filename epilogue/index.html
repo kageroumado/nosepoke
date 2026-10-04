@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — the disclosure</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  .manip { border-top: 1px solid var(--hair); padding: 14px; }
+  .manip:first-child { border-top: 0; }
+  .manip h3 {
+    margin: 0 0 2px;
+    font-family: var(--font-round);
+    font-size: 15px;
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  }
+  .manip .verdict {
+    font-family: var(--font-data);
+    font-size: 11px;
+    border: 1px solid var(--hair);
+    border-radius: 999px;
+    padding: 2px 9px;
+    color: var(--ink-3);
+  }
+  .manip[data-applied="1"] .verdict { color: var(--accent); border-color: var(--accent); }
+  .manip p { margin: 8px 0 0; font-size: 13.5px; color: var(--ink-2); }
+  .manip p b { color: var(--ink); font-weight: 600; }
+  .manip cite { color: var(--ink-3); font-style: normal; font-size: 12px; }
+  .evi { margin-top: 11px; border-top: 1px solid var(--hair); }
+  .evi .r {
+    display: flex; gap: 12px; align-items: baseline;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--hair);
+    font-size: 12.5px;
+  }
+  .evi .r:last-child { border-bottom: 0; }
+  .evi .r .k { color: var(--ink-3); flex: 1; min-width: 0; }
+  .evi .r .v { font-family: var(--font-data); font-size: 13px; color: var(--ink); text-align: right; }
+  .verdictline {
+    font-family: var(--font-round);
+    font-size: clamp(18px, 4.4vw, 25px);
+    line-height: 1.25;
+    margin: 0 0 10px;
+  }
+  .verdictline b { color: var(--accent); font-weight: 800; }
+  .codefield { margin-top: 12px; }
+  .codefield input { width: 100%; }
+  .scatter { margin-top: 12px; }
+  .scatter canvas { display: block; width: 100%; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap narrow">
+
+  <section class="procedure">
+    <h1>The disclosure</h1>
+    <p>This was a game about conditioning, and it conditioned you. Everything below was done
+      on purpose, and every claim is checked against what you actually did. Nothing is held
+      back past this page.</p>
+  </section>
+
+  <section class="card">
+    <h2>What was done to you <span class="live" id="appliedLab">—</span></h2>
+    <div id="manips"></div>
+  </section>
+
+  <section class="card" style="margin-top:14px">
+    <h2>Which rat you were</h2>
+    <div class="body" id="verdict"></div>
+  </section>
+
+  <section class="card" style="margin-top:14px">
+    <h2>Your data</h2>
+    <div class="body">
+      <p style="margin:0;font-size:13.5px;color:var(--ink-2)" id="dataLede"></p>
+      <div class="codefield field" style="padding:10px 0 0;border:0">
+        <input id="code" readonly spellcheck="false" value="">
+        <button class="btn" id="copyBtn">Copy</button>
+      </div>
+      <div class="actions">
+        <button class="btn" id="exportBtn">Export everything</button>
+        <button class="btn" id="wipeBtn">Delete my record</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="actions" id="actions"></div>
+
+  <footer class="foot">
+    nosepoke — reward-side operant paradigms, played straight. <code>kagerou.glass</code>
+  </footer>
+</div>
+
+<script type="module">
+import { mountShell } from '../shared/shell.js';
+import { load, disclose, disclosures, downloadJSON, reset } from '../shared/save.js';
+import { STRAINS } from '../shared/sim.js';
+import {
+  median, pearson, latencyRows, anticipationSplit,
+  ratioBlocks, choiceHalves, tracking, responder,
+} from './evidence.js';
+
+const LEVEL = 'epilogue';
+const shell = mountShell({ levelId: LEVEL, subtitle: 'everything the game did to you' });
+
+// The rig delays every input on every page by the vigor model's own output, and this is
+// the page that says so. Declaring it here keeps it in the same list as the rest.
+if (!disclosures().some((d) => d.kind === 'latency')) {
+  disclose('latency', { where: 'every page', formula: '90 + (1 - tonicNorm) * 260 ms' });
+}
+
+const state = load();
+const completed = state.progress.completed;
+const record = state.record;
+const disclosed = disclosures();
+
+const manips = document.getElementById('manips');
+let appliedCount = 0;
+
+/**
+ * Render one manipulation. `applied` false renders the same block with the evidence
+ * replaced by a single line saying it was never used on this player.
+ */
+function manipulation({ title, applied, verdict, paragraphs = [], evidence = [], chart = null }) {
+  if (applied) appliedCount++;
+  const el = document.createElement('div');
+  el.className = 'manip';
+  el.dataset.applied = applied ? '1' : '0';
+
+  const h = document.createElement('h3');
+  h.textContent = title;
+  const v = document.createElement('span');
+  v.className = 'verdict';
+  v.textContent = verdict;
+  h.append(v);
+  el.append(h);
+
+  for (const html of paragraphs) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    el.append(p);
+  }
+  if (evidence.length) {
+    const box = document.createElement('div');
+    box.className = 'evi';
+    for (const [k, val] of evidence) {
+      const r = document.createElement('div');
+      r.className = 'r';
+      const ke = document.createElement('span'); ke.className = 'k'; ke.textContent = k;
+      const ve = document.createElement('span'); ve.className = 'v'; ve.textContent = val;
+      r.append(ke, ve);
+      box.append(r);
+    }
+    el.append(box);
+  }
+  if (chart) el.append(chart);
+  manips.append(el);
+}
+
+const fmt = (v, d = 2) => (v == null || Number.isNaN(v) ? '—' : Number(v).toFixed(d));
+const pct = (v) => (v == null || Number.isNaN(v) ? '—' : Math.round(v * 100) + '%');
+
+// --- 1. input latency ------------------------------------------------------
+{
+  const rows = latencyRows(record);
+  const iris = rows.map((x) => x.iri);
+  const served = rows.map((x) => x.served);
+  const r = pearson(served, iris);
+
+  const paragraphs = [
+    'Every action you took on every page was held for a moment before it reached the rat. '
+      + 'The hold was <b>90 + (1 &minus; tonic) &times; 260 milliseconds</b>, where tonic is the '
+      + 'model’s running estimate of your reward rate. That is not a difficulty knob bolted '
+      + 'on: in the model this game runs, response latency <i>is</i> what tonic dopamine encodes, '
+      + 'so rendering it as input delay is the honest rendering '
+      + '<cite>(Niv, Daw, Joel &amp; Dayan 2007)</cite>. A session where reward was scarce felt '
+      + 'like molasses, and you were never told why.',
+  ];
+  const evidence = [];
+  if (rows.length) {
+    const fastest = rows.reduce((a, b) => (b.served < a.served ? b : a));
+    const slowest = rows.reduce((a, b) => (b.served > a.served ? b : a));
+    let lat = `Across your <b>${rows.length}</b> recorded sessions the delay you were served `
+      + `ranged from <b>${Math.round(fastest.served)} ms</b> in ${fastest.level} to `
+      + `<b>${Math.round(slowest.served)} ms</b> in ${slowest.level}. `;
+    if (r == null) {
+      lat += 'There are too few sessions to say whether your own pace tracked it.';
+    } else if (r > 0.25) {
+      lat += `Your own median gap between responses rose with it, at r = <b>${fmt(r)}</b> across `
+        + 'sessions. You were slower in exactly the sessions the model was slowing you down in.';
+    } else {
+      lat += `Across sessions your median gap barely tracked it, at r = <b>${fmt(r)}</b>. That is `
+        + 'what should happen: each level runs a different schedule, and a schedule moves how fast '
+        + 'you respond far more than a quarter-second of input delay does. The delay is not in '
+        + 'doubt, because it is computed from the model rather than measured from you. What the '
+        + 'spread shows is how much of it there was.';
+    }
+    paragraphs.push(lat);
+    evidence.push(['sessions with enough responses to measure', String(rows.length)]);
+    evidence.push(['fastest session served', Math.round(fastest.served) + ' ms · ' + fastest.level]);
+    evidence.push(['slowest session served', Math.round(slowest.served) + ' ms · ' + slowest.level]);
+    evidence.push(['your median response gap, overall', Math.round(median(iris)) + ' ms']);
+    if (r != null) evidence.push(['served delay against your response gap', 'r = ' + fmt(r)]);
+  } else if (!record.length) {
+    paragraphs.push('You have not recorded a session yet, so there is nothing of yours to show it '
+      + 'in. The delay is applied on every page you play from here.');
+  } else {
+    paragraphs.push('None of your recorded sessions has enough responses to measure it against, '
+      + 'so the delay is disclosed here without your own numbers behind it.');
+  }
+
+  manipulation({
+    title: 'Input latency',
+    applied: true,
+    verdict: 'applied on every page',
+    paragraphs,
+    evidence,
+    chart: rows.length >= 3 ? scatter(rows) : null,
+  });
+}
+
+// --- 2. the faint cue ------------------------------------------------------
+{
+  const cues = disclosed.filter((d) => d.kind === 'faint-cue');
+  if (!cues.length) {
+    manipulation({
+      title: 'Faint conditioned stimuli in the music',
+      applied: false,
+      verdict: 'never used on you',
+      paragraphs: ['The soundtrack can lift the pad by two semitones about 800 ms before reward '
+        + 'becomes available, below the threshold of noticing and above the threshold of learning '
+        + '<cite>(Pessiglione et al. 2008)</cite>. It never sounded in your sessions, either because '
+        + 'you played with the sound off or because you never reached a level that uses it.'],
+    });
+  } else {
+    const first = cues.map((c) => c.at).sort()[0];
+    const levels = [...new Set(cues.map((c) => c.level).filter(Boolean))];
+    const split = anticipationSplit(record, first);
+    const paragraphs = [
+      `The pad lifted by <b>${cues[0].semitones || 2} semitones</b> roughly `
+        + `<b>${cues[0].leadMs || 800} ms</b> before reward became available, `
+        + `<b>${cues.length}</b> ${cues.length === 1 ? 'time' : 'times'}`
+        + (levels.length ? `, in ${levels.join(', ')}` : '') + '. It was mixed to sit under '
+        + 'the threshold of noticing and over the threshold of learning, which is the gap '
+        + 'Pessiglione and colleagues showed humans learn reward associations across without '
+        + 'ever reporting the cue <cite>(Pessiglione et al. 2008)</cite>.',
+    ];
+    const evidence = [['times the cue sounded', String(cues.length)]];
+    if (split.before != null && split.after != null) {
+      const change = split.before ? (split.after / split.before - 1) : 0;
+      paragraphs.push('Here is the measure on your own record. For each session, how much '
+        + 'responding bunched into the second before a reinforcer arrived, relative to how fast '
+        + 'you were responding overall. Before the cue first sounded it ran at '
+        + `<b>${fmt(split.before)}&times;</b> your baseline rate; from that session on, `
+        + `<b>${fmt(split.after)}&times;</b>, a change of <b>${change >= 0 ? '+' : ''}`
+        + `${Math.round(change * 100)}%</b>. A schedule can push the same measure the same way `
+        + 'on its own, so this is a before-and-after on you and not a controlled comparison.');
+      evidence.push([`anticipation before the cue (${split.nBefore} sessions)`, fmt(split.before) + '×']);
+      evidence.push([`anticipation from the cue on (${split.nAfter} sessions)`, fmt(split.after) + '×']);
+    } else {
+      paragraphs.push('There are not sessions on both sides of the first cue in your record, so '
+        + 'the before-and-after cannot be computed. The cue still sounded.');
+    }
+    manipulation({ title: 'Faint conditioned stimuli in the music', applied: true, verdict: 'applied', paragraphs, evidence });
+  }
+}
+
+// --- 3. the variable-ratio block -------------------------------------------
+{
+  const told = disclosed.some((d) => d.kind === 'vr-slot');
+  const blocks = ratioBlocks((completed.d04 || {}).metrics);
+  if (!told && !blocks) {
+    manipulation({
+      title: 'The variable-ratio block',
+      applied: false,
+      verdict: 'never used on you',
+      paragraphs: ['A variable-ratio schedule pays out after an unpredictable number of responses, '
+        + 'which is the schedule a slot machine runs. You never played the ratio session, so it was '
+        + 'never run on you.'],
+    });
+  } else {
+    // The comparison the level makes is one ratio against the same ratio drawn at random,
+    // so the matching fixed block is the one to read, never an average over every block.
+    const vrBlock = blocks && blocks.variable.length ? blocks.variable[blocks.variable.length - 1] : null;
+    const frBlock = blocks && blocks.fixed.length
+      ? (vrBlock && blocks.fixed.find((b) => b.n === vrBlock.n)) || blocks.fixed[blocks.fixed.length - 1]
+      : null;
+    const frRate = frBlock ? frBlock.runRate : null;
+    const vrRate = vrBlock ? vrBlock.runRate : null;
+    const frPause = frBlock ? frBlock.meanPause : null;
+    const vrPause = vrBlock ? vrBlock.meanPause : null;
+    const price = vrBlock && frBlock && vrBlock.n === frBlock.n ? vrBlock.n : null;
+
+    const paragraphs = ['The ratio session ran a fixed ratio and then a variable one. Fixed ratio '
+      + 'pays after a set number of responses, so there is a moment after each pellet when the next '
+      + 'one is certainly far away, and animals pause there. Variable ratio removes that moment: the '
+      + 'next response might be the one, always. The game said out loud, once, that this is a slot '
+      + 'machine, and then ran it on you anyway '
+      + '<cite>(Ferster &amp; Skinner 1957)</cite>.'];
+    const evidence = [];
+    if (frRate != null && vrRate != null) {
+      const faster = vrRate > frRate;
+      paragraphs.push(`You ran at <b>${fmt(vrRate)}</b> responses per second under the variable `
+        + `schedule against <b>${fmt(frRate)}</b> under the fixed one`
+        + (price ? `, both priced at ${price} responses a pellet` : '') + '. '
+        + (faster
+          ? `That is <b>${Math.round((vrRate / frRate - 1) * 100)}% faster</b> for the same average `
+            + 'price. Unpredictability is not a flavor here. It is a rate change you can read off '
+            + 'your own record.'
+          : 'That is the direction the schedule usually does not go, so on this record the slot '
+            + 'machine did not get you. The pause after a reinforcer is the other half of the '
+            + 'signature, and it is below.'));
+      evidence.push(['run rate, fixed ratio', fmt(frRate) + ' /s']);
+      evidence.push(['run rate, variable ratio', fmt(vrRate) + ' /s']);
+    }
+    if (frPause != null && vrPause != null) {
+      evidence.push(['pause after a reinforcer, fixed ratio', fmt(frPause) + ' s']);
+      evidence.push(['pause after a reinforcer, variable ratio', fmt(vrPause) + ' s']);
+    }
+    if (!evidence.length) {
+      paragraphs.push('Your ratio session did not record run rates for both schedules, so the '
+        + 'comparison is missing from your record even though both blocks were run.');
+    }
+    manipulation({ title: 'The variable-ratio block', applied: true, verdict: 'applied', paragraphs, evidence });
+  }
+}
+
+// --- 4. the haloperidol session --------------------------------------------
+{
+  const halves = choiceHalves((completed.d07 || {}).metrics);
+  const flagged = disclosed.some((d) => d.kind === 'haloperidol');
+  if (!halves && !flagged) {
+    manipulation({
+      title: 'The haloperidol session',
+      applied: false,
+      verdict: 'never used on you',
+      paragraphs: ['The effort-choice session halves the tonic ceiling partway through and watches '
+        + 'the high-effort arm collapse while appetite holds. You never played it, so nothing was '
+        + 'halved on you.'],
+    });
+  } else {
+    const paragraphs = ['Halfway through the effort-choice session the model’s tonic ceiling '
+      + 'was cut in half and you were not told. Nothing about the pellets changed: the barrier arm '
+      + 'still paid four and the flat arm still paid two, and you were still hungry. What changed '
+      + 'was how much work the model would spend, which is the dissociation Salamone’s barrier '
+      + 'T-maze was built to show: dopamine depletion moves effortful choice while leaving food '
+      + 'intake alone.'];
+    const evidence = [];
+    if (halves) {
+      const drop = halves.base ? 1 - halves.halo / halves.base : 0;
+      paragraphs.push(`You took the barrier arm on <b>${pct(halves.base)}</b> of baseline trials and `
+        + `<b>${pct(halves.halo)}</b> after the ceiling dropped, a fall of `
+        + `<b>${Math.round(drop * 100)}%</b>. You did not decide to become lazy. A constant in the `
+        + 'model changed, and your choices followed it.');
+      evidence.push(['barrier choices, baseline', pct(halves.base)]);
+      evidence.push(['barrier choices, haloperidol session', pct(halves.halo)]);
+      evidence.push(['shift', Math.round(drop * 100) + '% fewer']);
+    } else {
+      paragraphs.push('Your record marks the session as run but does not carry both halves of the '
+        + 'choice fraction, so the shift cannot be shown in your own numbers.');
+    }
+    manipulation({ title: 'The haloperidol session', applied: true, verdict: 'applied', paragraphs, evidence });
+  }
+}
+
+document.getElementById('appliedLab').textContent =
+  appliedCount + ' of ' + manips.children.length + ' applied to you';
+
+// --- the verdict -----------------------------------------------------------
+{
+  const strainKey = state.player.strain
+    || (completed.d05 || completed.d09 || completed.park || {}).metrics?.strain
+    || Object.values(completed).map((c) => (c.metrics || {}).strain).find(Boolean)
+    || null;
+  const strain = strainKey && STRAINS[strainKey] ? STRAINS[strainKey] : null;
+  const track = tracking((completed.d01 || {}).metrics, record);
+  const resp = responder(state.player, completed);
+  const played = Object.keys(completed).length;
+
+  const box = document.getElementById('verdict');
+  const line = document.createElement('p');
+  line.className = 'verdictline';
+  // The roll and the derivation spell the responder phenotype differently; the sentence
+  // reads it aloud, so it gets one spelling.
+  const respLabel = String(resp.label).replace('-responder', ' responder');
+  if (!played) {
+    line.innerHTML = 'You have not run a session yet, so there is nothing to classify.';
+  } else {
+    const head = [strain ? strain.label : null, track ? track.label : null].filter(Boolean);
+    const bits = [];
+    if (head.length) bits.push(`a <b>${head.join(' ')}</b>`);
+    if (resp.label !== 'unclassified') bits.push(`and a <b>${respLabel}</b>`);
+    line.innerHTML = bits.length
+      ? 'You were ' + bits.join(', ') + '.'
+      : 'Your record does not carry enough to classify you.';
+  }
+  box.append(line);
+
+  const paras = [];
+  if (strain) {
+    paras.push(`<b>${strain.label}</b>: ${strain.note}. The strain set your learning rate to `
+      + `${fmt(strain.alpha)} and your resting vigor to ${fmt(strain.tonicBaseline, 2)}, and it set `
+      + `how well you could see and hear the cues. Two players on the same schedule with different `
+      + `strains were not playing the same game.`);
+  }
+  if (track) {
+    paras.push(`<b>${track.label}</b>: read from ${track.basis}. A sign-tracker goes to the cue that `
+      + 'predicts the reward; a goal-tracker goes to where the reward will appear. It is a stable '
+      + 'individual difference in rats, it predicts how strongly cues come to pull behavior around, '
+      + `and here it was read off you. You went to the cue ${track.speaker} times and to the tray `
+      + `${track.tray} times <cite>(Flagel &amp; Robinson)</cite>.`);
+  }
+  if (resp.label !== 'unclassified') {
+    paras.push(`<b>${respLabel}</b>: from ${resp.basis}. Your mean reward-rate estimate across every `
+      + `session was ${fmt(resp.tonic)}`
+      + (resp.breakpoint != null ? `, and you stopped working for a pellet at a ratio of ${resp.breakpoint}` : '')
+      + '. High responders to novelty acquire self-administration faster than low responders, and the '
+      + 'difference is measurable before any drug is given <cite>(Piazza et al. 1989)</cite>.');
+  }
+  paras.push('The classification is the point of the whole arc. The game never asked you a question '
+    + 'about yourself. It watched what you did on schedules that have been run on animals since the '
+    + 'nineteen-thirties, and the same measures that sort rats sorted you.');
+  for (const html of paras) {
+    const p = document.createElement('p');
+    p.style.cssText = 'margin:0 0 9px;font-size:13.5px;color:var(--ink-2)';
+    p.innerHTML = html;
+    box.append(p);
+  }
+}
+
+// --- the data --------------------------------------------------------------
+{
+  const latest = state.colony.length ? state.colony[state.colony.length - 1] : null;
+  document.getElementById('dataLede').textContent = latest
+    ? 'Your rat is its learned value function, and this is that function as a share code. Paste it '
+      + 'into the colony rack on another machine and it will run a session on its own.'
+    : 'You have no rat in the colony yet. Finish a session and its share code appears here.';
+  const code = document.getElementById('code');
+  code.value = latest ? latest.code : '';
+  code.placeholder = 'no rat yet';
+
+  document.getElementById('copyBtn').addEventListener('click', async () => {
+    if (!code.value) return;
+    code.select();
+    try { await navigator.clipboard.writeText(code.value); } catch { document.execCommand('copy'); }
+    const b = document.getElementById('copyBtn');
+    b.textContent = 'Copied';
+    setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    downloadJSON('nosepoke-my-record.json');
+  });
+
+  const wipe = document.getElementById('wipeBtn');
+  let armed = false;
+  wipe.addEventListener('click', () => {
+    if (!armed) {
+      armed = true;
+      wipe.textContent = 'Really delete everything';
+      setTimeout(() => { armed = false; wipe.textContent = 'Delete my record'; }, 5000);
+      return;
+    }
+    reset();
+    wipe.disabled = true;
+    wipe.textContent = 'Deleted';
+    code.value = '';
+  });
+}
+
+document.getElementById('actions').append(shell.continueLink('Back to the colony rack'));
+
+window.nosepoke = { level: LEVEL, shell, applied: appliedCount, disclosure: disclosed };
+
+// --- the latency scatter ---------------------------------------------------
+/**
+ * One point per session: the delay the model served against the gap the player actually
+ * left between responses. Drawn on paper stock in both themes, like every other figure.
+ */
+function scatter(rows) {
+  const wrap = document.createElement('div');
+  wrap.className = 'scatter figmat';
+  const canvas = document.createElement('canvas');
+  const cap = document.createElement('p');
+  cap.className = 'figcap';
+  cap.textContent = 'One point per recorded session: the delay the vigor model served, against your '
+    + 'own median gap between responses.';
+  wrap.append(canvas, cap);
+  requestAnimationFrame(() => paint(canvas, rows));
+  addEventListener('resize', () => paint(canvas, rows));
+  new MutationObserver(() => paint(canvas, rows))
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  return wrap;
+}
+
+function paint(canvas, rows) {
+  const g = getComputedStyle(document.documentElement);
+  const t = (n) => g.getPropertyValue(n).trim();
+  const ink = { paper: t('--paper'), ink: t('--paper-ink'), grid: t('--paper-grid'), mut: t('--paper-mut'), accent: t('--accent'), font: t('--font-data') };
+  const wCss = canvas.parentElement.clientWidth - 28;
+  if (wCss <= 0) return;
+  const hCss = Math.round(wCss * 0.42);
+  const dpr = devicePixelRatio || 1;
+  canvas.style.width = wCss + 'px';
+  canvas.style.height = hCss + 'px';
+  canvas.width = Math.round(wCss * dpr);
+  canvas.height = Math.round(hCss * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = ink.paper;
+  ctx.fillRect(0, 0, wCss, hCss);
+
+  const box = { x: 54, y: 14, w: wCss - 70, h: hCss - 40 };
+  const xs = rows.map((r) => r.served);
+  const ys = rows.map((r) => r.iri);
+  const x0 = Math.min(...xs) - 12, x1 = Math.max(...xs) + 12;
+  const y0 = 0, y1 = Math.max(...ys) * 1.15 || 1;
+  const X = (v) => box.x + ((v - x0) / Math.max(x1 - x0, 1)) * box.w;
+  const Y = (v) => box.y + box.h - ((v - y0) / Math.max(y1 - y0, 1)) * box.h;
+
+  ctx.strokeStyle = ink.ink; ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(box.x, box.y); ctx.lineTo(box.x, box.y + box.h); ctx.lineTo(box.x + box.w, box.y + box.h);
+  ctx.stroke();
+
+  ctx.fillStyle = ink.accent;
+  for (const r of rows) {
+    ctx.beginPath();
+    ctx.arc(X(r.served), Y(r.iri), 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = ink.mut;
+  ctx.font = `10px ${ink.font}`;
+  for (const r of rows) ctx.fillText(r.level, X(r.served) + 6, Y(r.iri) - 5);
+  ctx.fillText('served delay (ms) →', box.x + box.w - 110, box.y + box.h + 15);
+  ctx.save();
+  ctx.translate(13, box.y + 90);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('your gap (ms) →', 0, 0);
+  ctx.restore();
+  ctx.fillText(String(Math.round(x0)), box.x - 4, box.y + box.h + 15);
+  const yTick = String(Math.round(y1));
+  ctx.fillText(yTick, box.x - 6 - ctx.measureText(yTick).width, box.y + 8);
+}
+</script>
+</body>
+</html>

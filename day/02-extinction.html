@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — extinction</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Session 2 — continued acquisition</h1>
+    <p>The procedure from yesterday, repeated. Tone, then sucrose, thirty trials. Head entries into
+      the cup are recorded by the beam across its mouth; go there during the tone and the entry is
+      counted. Nothing else about the chamber has been changed.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Chamber 4 <small>Subject #23 · <span id="strainLab">—</span></small><span class="live" id="phaseLab">trial 0 / 30</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>Day two. The hopper was refilled this morning.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>tone · delivery · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>prediction V̂</span><span>TD(λ)</span></div>
+        <canvas id="vChart" height="44"></canvas>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>head entries per trial</span><span id="rateLab">0 entries</span></div>
+        <canvas id="rateChart" height="132" style="display:block;width:100%"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>cup</b> to check it · <kbd>M</kbd></span>
+    <span class="chip">every visit to the cup is one recorded entry</span>
+    <span class="chip">click anywhere to just wander</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 2 — complete</h3>
+      <p class="lede">The first figure in the file with red on it.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { conditionedApproach, headEntryWatcher, valueTracker, mean } from './conditioning.js';
+import './02-extinction.ref.js';
+
+const LEVEL = 'd02';
+const TRIALS = 30;
+const OMIT_FROM = 21;
+const PROBES = 8;
+const CS_SECONDS = 2;
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 2 — extinction' });
+
+// The same subject and the same three clocks as yesterday. What changes is that from
+// trial 21 the tone plays and nothing follows it.
+const sim = createSim({
+  seed,
+  strain: playerStrain(),
+  gamma: 0.99, alpha: 0.05, lambda: 0.9,
+  stimuli: {
+    eat: { bins: 44, width: 0.5 },
+    click: { bins: 14, width: 0.25 },
+    tone: { bins: 20, width: 0.25 },
+  },
+  autoEat: 0.6,
+  schedule: {
+    kind: 'EXT', trials: TRIALS, csDur: CS_SECONDS, iti: [4, 8],
+    omitFrom: OMIT_FROM, recovery: PROBES, recoveryFraction: 0.5,
+  },
+  policy: auto ? conditionedApproach({ sign: 0.15 }) : null,
+});
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    v: document.getElementById('vChart'),
+  },
+  layout: 'chamber',
+  show: ['tray', 'speaker'],
+  speed: auto ? 8 : 1,
+  onFrame: updateReadouts,
+});
+
+rig.props.tray.x = 180;
+rig.props.tray.y = 346;
+rig.props.speaker.x = 480;
+rig.props.speaker.y = 346;
+rig.props.speaker.stand = [0, 42];
+rig.rat.x = 330;
+rig.rat.y = 200;
+
+// A head entry into the cup is this level's recorded response, and the runtime counts
+// responses through poke, so every arrival at the cup becomes one.
+const pumpHeadEntries = headEntryWatcher(sim);
+
+// The other half of the record: what the model predicts two seconds into the tone,
+// where the sucrose used to arrive. That is the quantity extinction collapses and the
+// day boundary restores, and the debrief plots it under the player's own curve.
+const model = valueTracker(sim, { stimulus: 'tone', at: CS_SECONDS });
+
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+// The strain is rolled once per player and carried through the arc, so the
+// subject line reads it off the session rather than naming one.
+document.getElementById('strainLab').textContent = sim.strain.label;
+
+let trials = 0;
+let scanned = 0;
+let burstNoted = false;
+// Head entries per trial, kept as the session runs so the live panel never has to
+// rebuild the whole metrics block on a frame.
+const series = { acquisition: [], recovery: [], omitFrom: OMIT_FROM };
+let bucket = null;
+
+/** One pass over the new events per frame: sounds, the per-trial tally, the synthetic body. */
+function scanEvents() {
+  const events = sim.S.events;
+  for (; scanned < events.length; scanned++) {
+    const e = events[scanned];
+    if (e.type === 'trial') {
+      trials = e.stage === 'recovery' ? trials + 1 : e.n;
+      const into = e.stage === 'recovery' ? series.recovery : series.acquisition;
+      into.push(0);
+      bucket = into;
+    } else if (e.type === 'poke') {
+      if (bucket && bucket.length) bucket[bucket.length - 1]++;
+    } else if (e.type === 'phase' && e.name === 'recovery') trials = 0;
+    else if (e.type === 'delivery') sfx.click();
+    else if (e.type === 'cue' && e.name === 'tone') sfx.tone(true, CS_SECONDS);
+    else if (e.type === 'approach' && auto) walkTo(e.target);
+  }
+}
+
+/** In a synthetic session the policy calls the verb directly, so walk the body over too. */
+function walkTo(name) {
+  const p = rig.props[name];
+  if (!p) return;
+  const stand = p.stand || [0, 0];
+  rig.goToPoint(p.x + stand[0], p.y + stand[1]);
+}
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || sim.S.done) return;
+  if (e.key === 'm' || e.key === 'M' || e.code === 'Space') { e.preventDefault(); rig.goTo('tray'); }
+  else if (e.key === 's' || e.key === 'S') rig.goTo('speaker');
+});
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  rate: document.getElementById('rateLab'),
+};
+const rateCanvas = document.getElementById('rateChart');
+const RATE_HEIGHT = 132;
+
+let shown = false;
+function updateReadouts() {
+  const S = sim.S;
+  pumpHeadEntries();
+  model.pump();
+  scanEvents();
+  const recovery = S.phase === 'recovery';
+  els.phase.textContent = S.done ? 'session over'
+    : recovery ? 'probe ' + trials + ' / ' + PROBES
+      : 'trial ' + trials + ' / ' + TRIALS;
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.rate.textContent = S.counts.pokes + ' entries · V\u0302 '
+    + sim.valueAt('tone', CS_SECONDS).toFixed(2);
+  noteBurst();
+  drawRates();
+  if (S.done && !shown) { shown = true; setTimeout(debrief, auto ? 200 : 900); }
+}
+
+/** The field note the researcher writes once the burst has three trials behind it. */
+function noteBurst() {
+  if (burstNoted || series.acquisition.length < OMIT_FROM + 2) return;
+  burstNoted = true;
+  const pre = mean(series.acquisition.slice(OMIT_FROM - 4, OMIT_FROM - 1));
+  const burst = mean(series.acquisition.slice(OMIT_FROM - 1, OMIT_FROM + 2));
+  sim.note(burst > pre
+    ? 'Subject shows burst on omission — expected. Continuing the block.'
+    : 'Subject stopped responding on omission without a burst. Unusual. Continuing the block.');
+}
+
+/** The live version of the debrief figure: head entries per trial, red once unpaid. */
+function drawRates() {
+  const w = rateCanvas.clientWidth || 300;
+  const h = RATE_HEIGHT;
+  const dpr = devicePixelRatio || 1;
+  if (rateCanvas.width !== Math.round(w * dpr)) {
+    rateCanvas.width = Math.round(w * dpr);
+    rateCanvas.height = Math.round(h * dpr);
+    rateCanvas.style.height = h + 'px';
+  }
+  const ctx = rateCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const c = rig.colors;
+  ctx.clearRect(0, 0, w, h);
+
+  const s = series;
+  const slots = TRIALS + PROBES + 1;
+  const yMax = Math.max(4, Math.ceil(Math.max(1, ...s.acquisition, ...s.recovery) * 1.12));
+  const pad = 6;
+  const X = (i) => pad + ((w - pad * 2) * i) / (slots - 1);
+  const Y = (v) => h - pad - ((h - pad * 2) * Math.min(v, yMax)) / yMax;
+  const bw = Math.max(2, (w - pad * 2) / slots - 2);
+
+  ctx.strokeStyle = c.paperGrid; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad, Y(0)); ctx.lineTo(w - pad, Y(0)); ctx.stroke();
+  ctx.save();
+  ctx.strokeStyle = c.down; ctx.globalAlpha = 0.5; ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(X(OMIT_FROM - 1.5), pad); ctx.lineTo(X(OMIT_FROM - 1.5), h - pad);
+  ctx.stroke();
+  ctx.restore();
+
+  s.acquisition.forEach((v, i) => {
+    ctx.fillStyle = i < OMIT_FROM - 1 ? c.paperInk : c.down;
+    ctx.fillRect(X(i) - bw / 2, Y(v), bw, Y(0) - Y(v));
+  });
+  ctx.fillStyle = c.down;
+  s.recovery.forEach((v, i) => {
+    ctx.fillRect(X(TRIALS + 1 + i) - bw / 2, Y(v), bw, Y(0) - Y(v));
+  });
+}
+
+rig.start();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  metrics = sim.metrics();
+  // The value series is sampled as the session runs, so it travels with the metrics
+  // block into the figure, the save record, and the exported session.
+  metrics.modelValues = model.values;
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-extinction.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, schedule: sim.cfg.schedule },
+    metrics,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    weights: Array.from(sim.weights()),
+    modelValues: model.values,
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d02-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

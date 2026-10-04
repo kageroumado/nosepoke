@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nosepoke — progressive ratio</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐭</text></svg>">
+<link rel="stylesheet" href="../shared/nosepoke.css">
+<style>
+  /* The price of the next pellet, drawn as the work it asks for rather than as a number. */
+  .pips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; min-height: 20px; }
+  .pips i {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--hair);
+    transition: background .12s;
+  }
+  .pips i.paid { background: var(--accent); }
+  .meter.wait i { background: var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="procedure">
+    <h1>Session 2 — progressive ratio</h1>
+    <p>Every reinforcement costs more responses than the one before it. The requirement is not
+      announced to the subject. The session is terminated when three minutes pass without a
+      completed ratio.</p>
+  </section>
+
+  <div class="stage">
+    <section class="card">
+      <h2>Chamber 4 <small>Subject #23 · <span class="strainLab">Wistar</span></small><span class="live" id="phaseLab">schedule active</span></h2>
+      <canvas id="arena"></canvas>
+      <div class="notes">
+        <span class="tag">researcher notes</span>
+        <p id="note"><em>A lever this time. The port has been capped off.</em></p>
+      </div>
+    </section>
+
+    <section class="card rig">
+      <h2>Acquisition <small>dLight photometry (sim)</small><span class="live" id="tonicLab">DA —</span></h2>
+      <div class="strip">
+        <div class="lab"><span>dopamine (ΔF/F)</span><span>30 s</span></div>
+        <canvas id="daChart" height="118"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>events</span><span>press · delivery · consume</span></div>
+        <canvas id="evChart" height="26"></canvas>
+      </div>
+      <div class="strip">
+        <div class="lab"><span>the current requirement</span><span id="paidLab"></span></div>
+        <div class="pips" id="pips"></div>
+      </div>
+      <div class="paperpanel">
+        <div class="lab"><span>cumulative record</span><span id="cumLab">0 responses</span></div>
+        <canvas id="cumChart" height="132"></canvas>
+      </div>
+      <div class="vitals">
+        <div class="v"><label>satiety</label><div class="meter"><i id="satBar" style="width:12%"></i></div></div>
+        <div class="v"><label>since last pellet</label><div class="meter wait"><i id="waitBar" style="width:0%"></i></div></div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hints">
+    <span class="chip">click the <b>lever</b> to press · <kbd>space</kbd></span>
+    <span class="chip">click the <b>tray</b> to eat · <kbd>M</kbd></span>
+    <span class="chip">the row of dots is what this pellet costs</span>
+  </div>
+
+  <footer class="foot">
+    Every trace is a real TD(λ) model running on your behavior — nothing is scripted.
+  </footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="sheet">
+    <div class="inner">
+      <h3>Session 2 — complete</h3>
+      <p class="lede">Stapled to the cage card, under a note in a different hand.</p>
+      <div class="figmat">
+        <canvas id="fig"></canvas>
+        <p class="figcap" id="figcap"></p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="explain" id="explain"></div>
+      <div class="actions" id="actions">
+        <button class="btn" id="saveBtn">Save figure</button>
+        <button class="btn" id="jsonBtn">Export session</button>
+        <button class="btn" id="againBtn">Run it back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createSim } from '../shared/sim.js';
+import { mountRig } from '../shared/rig.js';
+import { mountShell } from '../shared/shell.js';
+import { renderFigure, downloadPNG, figureCaption, figureStats, figureInterpretation, shareText } from '../shared/figure.js';
+import { completeLevel, addRecord, addRat, playerStrain } from '../shared/save.js';
+import { sfx } from '../shared/audio.js';
+import { prConfig, prSubject, PR_TIMEOUT } from './06-pr.subject.js';
+import './06-pr.ref.js';
+
+const LEVEL = 'd06';
+const params = new URLSearchParams(location.search);
+const auto = params.get('auto') === '1';
+const seed = Number(params.get('seed')) || 23;
+
+const shell = mountShell({ levelId: LEVEL, subtitle: 'day 6 — progressive ratio' });
+
+// The session, its synthetic subject, and the reference curve in the debrief all come
+// from one module, so the figure compares the player against the same experiment.
+const sim = createSim({ ...prConfig({ seed, magnitude: 1, policy: auto ? prSubject() : null }), strain: playerStrain() });
+
+const rig = mountRig({
+  sim,
+  arenaEl: document.getElementById('arena'),
+  charts: {
+    da: document.getElementById('daChart'),
+    ev: document.getElementById('evChart'),
+    cum: document.getElementById('cumChart'),
+  },
+  layout: 'chamber',
+  show: ['lever', 'tray'],
+  speed: auto ? 10 : 1,
+  onFrame: updateReadouts,
+  onTap(prop) {
+    if (prop === 'lever') { pressLever(); return false; }
+    if (prop === 'tray') { eatPellet(); return false; }
+    return true;
+  },
+});
+
+// An operant chamber puts the magazine beside the lever, and on this schedule that
+// matters: at a ratio of thirty the subject cannot spend the session walking.
+rig.props.tray.x = 496;
+rig.props.tray.y = rig.arena.h - 44;
+
+rig.on('eat', () => sfx.crunch());
+shell.bindNotes(sim, document.getElementById('note'));
+
+/**
+ * Send the rat to a prop, or do that prop's work in place when it is already standing
+ * there. A rat on a ratio schedule stays at the lever between presses rather than walking
+ * a lap for each one, and routing repeat responses this way means a fast run of presses
+ * is paced by the vigor latency alone.
+ */
+function workAt(name, act) {
+  if (sim.S.done) return;
+  const p = rig.props[name];
+  const s = p.stand || [0, 0];
+  if (Math.hypot(rig.rat.x - (p.x + s[0]), rig.rat.y - (p.y + s[1])) < 46) {
+    rig.rat.target = null; rig.rat.action = null; rig.rat.targetProp = null;
+    rig.intend(act);
+  } else if (rig.rat.targetProp !== name) {
+    rig.goTo(name);
+  }
+}
+
+const pressLever = () => workAt('lever', () => {
+  rig.rat.poseT = 1;
+  if (sim.press()) sfx.press();
+});
+const eatPellet = () => workAt('tray', () => { if (sim.eat()) sfx.crunch(); });
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || sim.S.done) return;
+  if (e.code === 'Space') { e.preventDefault(); pressLever(); }
+  else if (e.key === 'm' || e.key === 'M') { eatPellet(); }
+});
+
+// The dispenser click is the conditioned stimulus, so it sounds on delivery rather than
+// on the response that earned it.
+let deliveriesHeard = 0;
+let lastPellet = 0;
+
+const els = {
+  phase: document.getElementById('phaseLab'),
+  tonic: document.getElementById('tonicLab'),
+  clock: document.getElementById('clock'),
+  sat: document.getElementById('satBar'),
+  wait: document.getElementById('waitBar'),
+  cum: document.getElementById('cumLab'),
+  pips: document.getElementById('pips'),
+  paid: document.getElementById('paidLab'),
+};
+
+/** The pip row is rebuilt only when the price changes, and repainted as it is paid. */
+const PIP_CAP = 200;
+let pipCount = -1;
+function paintPrice(need, paid) {
+  const want = Math.min(need, PIP_CAP);
+  if (want !== pipCount) {
+    pipCount = want;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < want; i++) frag.append(document.createElement('i'));
+    els.pips.replaceChildren(frag);
+    els.paid.textContent = need > PIP_CAP ? '+' + (need - PIP_CAP) + ' more' : '';
+  }
+  const on = Math.min(paid, want);
+  const kids = els.pips.children;
+  for (let i = 0; i < kids.length; i++) {
+    const lit = i < on;
+    if (kids[i].classList.contains('paid') !== lit) kids[i].classList.toggle('paid', lit);
+  }
+}
+
+let shown = false;
+function updateReadouts() {
+  const S = sim.S;
+  if (S.counts.deliveries > deliveriesHeard) {
+    deliveriesHeard = S.counts.deliveries;
+    lastPellet = S.t;
+    sfx.click();
+  }
+
+  const pr = sim.schedule.metrics();
+  let earned = 0;
+  for (const r of pr.ratios) earned += r;
+  paintPrice(pr.nextRatio, S.counts.presses + S.counts.pokes - earned);
+
+  els.phase.textContent = S.done ? 'session over' : 'schedule active';
+  els.tonic.textContent = 'DA ' + (S.tonicNorm * 100).toFixed(0) + '%';
+  const mm = String(Math.floor(S.t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(S.t % 60)).padStart(2, '0');
+  els.clock.textContent = mm + ':' + ss;
+  els.sat.style.width = (S.satiety * 100).toFixed(0) + '%';
+  els.wait.style.width = Math.min(100, ((S.t - lastPellet) / PR_TIMEOUT) * 100).toFixed(0) + '%';
+  els.cum.textContent = S.counts.presses + ' responses';
+  if (S.done && !shown) { shown = true; setTimeout(debrief, auto ? 200 : 900); }
+}
+
+rig.start();
+
+// Test hook: the smoke suite reads the live session from here.
+window.nosepoke = { sim, rig, shell, level: LEVEL };
+
+// --- the debrief ---------------------------------------------------------
+let metrics = null;
+function debrief() {
+  metrics = sim.metrics();
+  document.getElementById('veil').classList.add('show');
+  renderFigure(document.getElementById('fig'), { sim, level: LEVEL, metrics });
+  document.getElementById('figcap').textContent = figureCaption(LEVEL);
+
+  const stats = document.getElementById('stats');
+  stats.replaceChildren();
+  for (const [value, label] of figureStats(LEVEL, metrics, sim)) {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = value;
+    const s = document.createElement('span'); s.textContent = label;
+    d.append(b, s);
+    stats.append(d);
+  }
+
+  const explain = document.getElementById('explain');
+  explain.replaceChildren();
+  for (const html of figureInterpretation(LEVEL, metrics, sim)) {
+    const p = document.createElement('p');
+    p.innerHTML = html;
+    explain.append(p);
+  }
+
+  window.nosepoke.metrics = metrics;
+  completeLevel(LEVEL, metrics);
+  addRecord({ level: LEVEL, seed, share: shareText(LEVEL, metrics), events: sim.S.events, metrics });
+  addRat({ name: 'Subject 23', level: LEVEL, strain: sim.cfg.strain, code: sim.serialize() });
+
+  document.getElementById('actions').append(shell.continueLink());
+  document.title = 'nosepoke — ' + shareText(LEVEL, metrics);
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  downloadPNG({ sim, level: LEVEL, metrics }, 'nosepoke-progressive-ratio.png');
+});
+
+document.getElementById('jsonBtn').addEventListener('click', () => {
+  const session = {
+    game: 'nosepoke', level: LEVEL, recorded: new Date().toISOString(),
+    config: { seed, strain: sim.cfg.strain, gamma: sim.cfg.gamma, alpha: sim.cfg.alpha, lambda: sim.cfg.lambda, schedule: sim.cfg.schedule },
+    metrics,
+    notes: sim.S.notes,
+    events: sim.S.events,
+    weights: Array.from(sim.weights()),
+    share: sim.serialize(),
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nosepoke-d06-session.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+document.getElementById('againBtn').addEventListener('click', () => {
+  const p = new URLSearchParams(location.search);
+  p.set('seed', String(Math.floor(Math.random() * 1e9)));
+  location.search = p.toString();
+});
+</script>
+</body>
+</html>

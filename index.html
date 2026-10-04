@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d0e">
+<title>nosepoke</title>
+<meta name="description" content="You are a lab rat. Choose freely. Every choice was sealed before you made it.">
+<meta property="og:title" content="nosepoke">
+<meta property="og:description" content="You are a lab rat. Choose freely. Every choice was sealed before you made it.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://kagerou.glass/nosepoke/og.png">
+<meta property="og:url" content="https://kagerou.glass/nosepoke/">
+<link rel="canonical" href="https://kagerou.glass/nosepoke/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='34' fill='%23111'/><circle cx='50' cy='50' r='22' fill='%23000'/><circle cx='50' cy='16' r='7' fill='%23ffd27a'/></svg>">
+<link rel="stylesheet" href="game/game.css">
+</head>
+<body>
+<main id="game">
+  <canvas id="world" tabindex="0" aria-label="The world, seen from a rat's eye. Move with W and S or the arrow keys, turn with A and D or the mouse, interact with E."></canvas>
+  <canvas id="overlay" aria-hidden="true"></canvas>
+  <div id="eyelids" aria-hidden="true"><i></i><i></i></div>
+  <div id="fade" aria-hidden="true"></div>
+
+  <div id="hud" hidden>
+    <div class="rec"><b></b><span id="hud-cam">CAM 04</span><span id="hud-time">00:00:00</span></div>
+    <div class="protocol"><span id="hud-session">PROTOCOL</span> <code id="hud-hash">········</code></div>
+  </div>
+  <p id="prompt" hidden><kbd>E</kbd><span></span></p>
+  <p id="caption" aria-live="polite"></p>
+  <button id="act" hidden aria-label="Interact">●</button>
+  <div id="stick" hidden aria-hidden="true"><i></i></div>
+  <button id="mute" aria-pressed="false" aria-label="Mute sound">sound</button>
+
+  <section id="title" class="screen">
+    <div class="title-inner">
+      <h1>nosepoke</h1>
+      <p class="lede">You are a rat. You can go wherever you like.</p>
+      <button id="begin" class="primary">Wake up</button>
+      <p class="fine">About ten minutes · headphones help<br><span class="keys">W S move · A D or mouse turn · E interact · shift runs</span><span class="touch">drag the left side to move · drag the right to look · tap ● to interact</span></p>
+      <p class="fine protocol-line">protocol <code id="title-hash">········</code></p>
+    </div>
+  </section>
+
+  <section id="reveal" class="panel" hidden aria-live="polite">
+    <p class="eyebrow" id="reveal-eyebrow">TRACKING · SESSION 1</p>
+    <h2 id="reveal-title">Written before you woke up.</h2>
+    <ol id="reveal-log"></ol>
+    <p id="reveal-score" class="score"></p>
+    <details id="seal-details"><summary>Check the seal</summary><div id="seal-body"></div></details>
+    <p id="reveal-note" class="fine" hidden>In session 2 each fork carries its own seal on the plaque between the doors, fixed before you reach it.</p>
+    <button id="reveal-next" class="primary" hidden>Session 2</button>
+  </section>
+
+  <section id="ending" class="screen" hidden>
+    <div class="ending-inner">
+      <p class="eyebrow">SUBJECT <span id="end-subject">23</span> · END OF PROTOCOL</p>
+      <dl class="tally">
+        <div><dt>Session 1, not knowing</dt><dd id="end-s1"></dd></div>
+        <div><dt>Session 2, knowing</dt><dd id="end-s2"></dd></div>
+        <div><dt>Statements about session 2</dt><dd id="end-meta"></dd></div>
+      </dl>
+      <div class="port-row">
+        <button id="port" aria-label="Share your result"><span class="port-light"></span><span class="port-hole"></span></button>
+        <div><p id="port-line">M5 · subject shares the result</p><p id="port-note">pending</p></div>
+      </div>
+      <ol id="end-log"></ol>
+      <details><summary>Check every seal</summary><div id="end-seals"></div></details>
+      <p class="fine"><button id="again" class="link">Wake up again</button> · <a class="link" href="https://kagerou.glass/" target="_blank" rel="noopener">kagerou.glass</a></p>
+    </div>
+  </section>
+
+  <div id="loading" class="screen"><p>…</p></div>
+</main>
+<noscript><p style="padding:2rem;color:#ddd;font-family:system-ui">nosepoke is a 3D game and needs JavaScript and WebGL.</p></noscript>
+<script type="module" src="game/main.js"></script>
+</body>
+</html>
